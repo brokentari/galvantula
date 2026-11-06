@@ -1,46 +1,25 @@
 # Review: phase-1
 
-Reviewer: claude-sonnet-5-5 at high effort, in a new session. Range: 6189377..32512db. Date: 2026-11-06. Cost: $0.58.
+Reviewer: claude-sonnet-5-5 at high effort, in a new session. Range: 6189377..f7ab30e. Date: 2026-11-06. Cost: $0.50.
 
-What this change does: The server now finds its own git commit once at startup, and each `run_created` event records it. `factory eval` copies that commit from the run into each result line, so a result names the code that ran it. Results files do not make the commit `-dirty`. The workspace also turns off commit signing, so a host that signs commits cannot break the runtime's own commits. Earlier commits in this range add the sandboxed Claude executor, the eval command, and the review fixes. I read those as well.
+What this change does: It adds phase 1 of the factory. One agent node runs Claude Code inside a bubblewrap sandbox. The runtime checks the agent's work (gofmt, vet, `go fix -diff`, build, the agent's own tests, and frozen files), then commits and merges it. It also adds budgets, retries, a usage-limit stop, `factory eval` (runs evals and scores them with hidden tests), and cost display in the UI. The last two commits skip a hidden test as a failure, reword a comment, and let `phasereview` accept "Looks good. Ship."
 
-Load I assumed: one person on one machine, running `factory eval` with `-parallel 1`, as the README says.
+I assumed the load is one person running the server on their own machine. The default is one eval run at a time, and the README says the API has no login. I read the diff and the code around it. I also checked that `ui/src/gen/events.ts` matches the Go types and that no stale link to the deleted plan `.md` is left.
 
-I found nothing that must be fixed. I checked these and they hold up:
-- The server's Host and Content-Type checks, which stop a web page from starting paid runs.
-- The credential, which travels in the sandbox environment and not on the command line.
-- The retry, resume and backoff logic in the runner.
-- The generated `ui/src/gen/events.ts`, which is in sync.
+I found nothing that must be fixed or should be fixed.
 
-**Must fix:** none.
+### Nice to have
 
-**Should fix:**
+1. **Build caches are not cleared if `hiddenTests` is killed** (`cmd/factory/eval.go`, `hiddenTests`)
+   - **What this is:** Scoring makes a new Go build cache and a new HOME folder with `os.MkdirTemp` in the system temp folder. It deletes both with `defer`.
+   - **Problem:** A hard kill of `factory eval` leaves them in `/tmp`. The agent caches are covered by the cleanup in `factory serve` at start, but these are not.
+   - **Fix:** None needed for one user. If it ever matters, put them under `runs/.cache/build` too, which `serve` already empties.
+   - **If we skip it:** A killed eval leaves a few MB per scored run in `/tmp` until the next reboot.
 
-1. **`factoryCommit` has no test** (`cmd/factory/main.go`, `factoryCommit`)
-   - **What this is:** At startup, the server runs `git rev-parse` and `git status --porcelain -- . :!evals/results`. It builds the commit string from them, adding `-dirty` when the tree has changes.
-   - **Problem:** Three branches decide what every eval result says: git fails, the tree is dirty, and a change under `evals/results` is ignored. Nothing tests any of them. If the `:!evals/results` pathspec (git's "exclude this path" syntax) is wrong, every batch is marked `-dirty` and results from different versions look the same.
-   - **Fix:** Add one test. It runs `git init` in a temp folder and uses `t.Chdir` to move there. Then:
-     - Commit one file and expect a bare hash.
-     - Add `evals/results/x.jsonl` and expect no `-dirty`.
-     - Add any other file and expect `-dirty`.
-   - **If we skip it:** A broken pathspec or a git error produces a wrong label in every result, and nobody notices until two batches get compared.
+### Prose
 
-2. **No test shows the runner records the commit** (`internal/runner/runner.go`, `Start`; `internal/runner/runner_test.go`)
-   - **What this is:** `Start` puts `r.Commit` into `RunCreatedData.Commit`, and `Fold` copies it into `State.Commit`.
-   - **Problem:** The new eval test fakes the server and writes the event itself, so it never runs `Runner.Start`. If `Start` dropped the commit, every test would still pass and real results would have an empty commit.
-   - **Fix:** In `TestFactoryDemoRun`, set `r.Commit = "abc1234"` before `Start`. After the run, assert `st.Commit == "abc1234"`. This is two lines.
-   - **If we skip it:** A later edit to `Start` can silently drop the field, and the eval's whole purpose, naming the code that ran, fails with no test red.
+None. The README, code comments, and commit text I read are plain, active, and consistent. The lock/standards language matches the repo's own terms.
 
-3. **Prose: wrong comment on the `Commit` field** (`cmd/factory/eval.go`, `evalResult.Commit`)
-   - **What this is:** A doc comment on the result field.
-   - **Problem:** It says "the server's commit when the run started". The code takes the commit once, when the server starts. If someone commits and then starts a run on the same server, the field still holds the older commit. The comment is wrong in exactly that case.
-   - **Fix:** Write `// the commit the server started on, with -dirty for uncommitted changes`.
-   - **If we skip it:** A reader trusts the field to name the code at run time.
+Verdict: Ship.
 
-**Nice to have:** none.
-
-Verdict: fix 1, 2 and 3 first. They are small, and none of them blocks a run.
-
-Lean: no lean findings.
-
-Not checked: I did not run the tests or `go fix -diff`. I also could not confirm that `uuid` is a standard-library import in the installed Go 1.27.
+Not checked: I did not run the code or tests. I could not measure how much slower each attempt is with a new, empty Go build cache for the agent and for the check. The README already says the eval must run again on the final code. Compare time and cost against the old batch when it does.
