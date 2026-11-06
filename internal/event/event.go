@@ -107,8 +107,10 @@ type RunFinishedData struct {
 func New(run string, t Type, node string, attempt int, data any) Event {
 	e := Event{Run: run, Type: t, Node: node, Attempt: attempt}
 	if data != nil {
-		// The payload types hold only strings, numbers, bools and slices of them.
-		e.Data, _ = json.Marshal(data)
+		// The payloads hold only strings, numbers, bools and slices of them,
+		// so the only way to fail is invalid UTF-8, such as a stray byte in
+		// tool output. Replace it rather than lose the event's data.
+		e.Data, _ = json.Marshal(data, jsontext.AllowInvalidUTF8(true))
 	}
 	return e
 }
@@ -188,7 +190,7 @@ func (s *State) Apply(e Event) error {
 		}
 		s.Nodes = nodes
 		// A plan node succeeds in the same event that adds its nodes, so a
-		// crash cannot fall between the two.
+		// crash cannot leave one write done and the other missing.
 		if n, ok := s.Nodes[e.Node]; ok {
 			n.Status = Succeeded
 		}

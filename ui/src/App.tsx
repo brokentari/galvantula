@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { FactoryEvent, RunSummary } from "./gen/events";
 import { GraphView } from "./GraphView";
 import { NodePanel } from "./NodePanel";
-import { describe, fold } from "./state";
+import { apply, describe, fold, type RunView } from "./state";
 
 const playStepMs = 350;
 
@@ -28,34 +28,43 @@ function useRuns(): RunSummary[] {
   return runs;
 }
 
+interface Stream {
+  events: FactoryEvent[];
+  live?: RunView; // the run after every event so far
+}
+
 // useEvents streams a run's events. EventSource reconnects by itself and
-// sends Last-Event-ID, so the server resumes where the stream stopped.
-function useEvents(runId: string | undefined): FactoryEvent[] {
-  const [events, setEvents] = useState<FactoryEvent[]>([]);
+// sends Last-Event-ID, so the server resumes where the stream stopped. Each
+// new event is applied once; only replay rebuilds the run from the start.
+function useEvents(runId: string | undefined): Stream {
+  const [stream, setStream] = useState<Stream>({ events: [] });
   useEffect(() => {
-    setEvents([]);
+    setStream({ events: [] });
     if (!runId) return;
     const es = new EventSource(`/api/runs/${runId}/events`);
     es.onmessage = (msg) => {
       const e = JSON.parse(msg.data) as FactoryEvent;
-      setEvents((prev) => (prev.length && prev[prev.length - 1].seq >= e.seq ? prev : [...prev, e]));
+      setStream((s) => {
+        const last = s.events.at(-1);
+        return last && last.seq >= e.seq ? s : { events: [...s.events, e], live: apply(s.live, e) };
+      });
     };
     return () => es.close();
   }, [runId]);
-  return events;
+  return stream;
 }
 
 export function App() {
   const runs = useRuns();
   const [chosen, setChosen] = useState(() => location.hash.slice(1));
   const runId = chosen || runs[0]?.id;
-  const events = useEvents(runId);
+  const { events, live: liveRun } = useEvents(runId);
   const [cursor, setCursor] = useState<number | null>(null); // null means live
   const [playing, setPlaying] = useState(false);
   const [selected, setSelected] = useState<string>();
 
   const shown = useMemo(() => (cursor === null ? events : events.slice(0, cursor)), [events, cursor]);
-  const run = useMemo(() => fold(shown), [shown]);
+  const run = useMemo(() => (cursor === null ? liveRun : fold(shown)), [cursor, liveRun, shown]);
   const live = cursor === null;
 
   useEffect(() => {

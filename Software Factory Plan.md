@@ -259,5 +259,5 @@ Five to ten specs in `evals/<name>/spec.md`, each with hidden acceptance tests a
 
 - bubblewrap cannot filter the network by host. Workers share the network for now. To fix this later, run workers in their own network namespace behind a proxy that allows only the API.
 - Code that `go test` runs can read `ANTHROPIC_API_KEY`. Give the factory its own workspace key with a low spend limit.
-- The architect's tests can be wrong too. The contract gate, the red-before-green check and the hidden eval tests are the three defences.
+- The architect's tests can be wrong too. The contract gate, the red-before-green check and the hidden eval tests are the three defenses.
 - Only 25 of the Go guidelines are tool-checked. The other 29, the ponytail rules and the Orwell rules depend on the review agent's judgment. Watch the eval numbers to see whether the review catches them.

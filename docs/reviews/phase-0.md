@@ -1,10 +1,8 @@
 # Review: phase-0
 
-Reviewer: claude-sonnet-5-5 at high effort, in a new session. Range: start..40bda8a. Date: 2026-11-05. Cost: $0.60.
+Reviewer: claude-sonnet-5-5 at high effort, in a new session. Range: start..1823952. Date: 2026-11-06. Cost: $0.91.
 
-What this change does: It builds Phase 0 of the software factory. A Go runtime runs a graph of work nodes and records every step in a SQLite event log. A fake executor plays a script, an HTTP/SSE server feeds a React UI, and `evalgen` and `phasereview` call headless Claude. The change also adds the pinned standards, three evals, and the docs.
-
-I assumed one person running this on their own machine. I read the code but did not run it, because Bash was denied part-way through the review (see "Not checked").
+What this change does: It adds Phase 0 of the software factory and fixes the earlier review findings. The pieces are a Go runtime with a SQLite event log, a fake executor, an HTTP/SSE server, a React UI, pinned coding standards, three model-written evals, and the `evalgen` and `phasereview` tools. I assumed one person on a laptop, with the server on localhost and only the fake executor. I read the code and did not run it.
 
 ## Must fix
 
@@ -12,104 +10,64 @@ None.
 
 ## Should fix
 
-1. **Server listens on every network interface, with no limits** (`cmd/factory/main.go:65`, `internal/server/server.go:63,82`)
-   - **What this is:** `factory serve` starts an HTTP server. Anyone who can reach it can start runs (`POST /api/runs`) and approve or reject gates.
-   - **Problem:** The default address is `:7070`, which means all interfaces. There is no login and no cap on request body size. The README only ever uses `localhost`. Phase 1 will run Claude with write access behind this server, so a LAN neighbor could approve a gate.
-   - **Fix:** Change the default to `localhost:7070`. Wrap both request bodies with `http.MaxBytesReader(w, r.Body, 1<<20)`. That is three lines.
-   - **If we skip it:** The first real executor starts with an open door.
+1. **Any web page can call the local API** (`internal/server/server.go:62-70,88-99`)
+   - **What this is:** `POST /api/runs` and `POST /api/runs/{run}/gates/{node}` read the body as JSON. They do not look at the `Content-Type` header. The last commit moved the listen address to `localhost`, but a browser on the same machine can still reach it.
+   - **Problem:** A page the user opens can send a cross-site POST with `Content-Type: text/plain` and a JSON body. This is a "simple request", so the browser sends it with no preflight check. The server accepts it. That page can start runs and approve gates. The 1 MB body cap in `maxBody` also has no test.
+   - **Fix:** In `startRun` and `decide`, return 415 unless `r.Header.Get("Content-Type")` is `application/json`. That forces a preflight, which the server never answers. The UI already sends that header. Add one test that sends `text/plain` and expects 415, and one that sends a body larger than 1 MB.
+   - **If we skip it:** With the fake executor the damage is junk runs. Once phase 1 adds a real executor, a web page could approve a gate that guards real work.
 
-2. **A crash at the wrong moment kills a run that should resume** (`internal/runner/runner.go:253-269`, `internal/graph/graph.go:199`)
-   - **What this is:** When a plan node finishes, `complete` writes two separate events: `graph_updated`, then `node_succeeded`. The README promises that a run continues after `kill -9`.
-   - **Problem:** If the process dies between those two writes, the plan node is still "running" on restart. The runtime marks it as an infra failure and runs it again. `Fill` has already removed the slot, so `fillSlot` returns "no slot is filled by this plan node". That counts as a task failure. With `retries: 1` the run fails for good.
-   - **Fix:** Make it one event. In `State.Apply`, when `graph_updated` carries a node, mark that node `Succeeded` as well. Skip the separate `node_succeeded` for plan nodes. Make the same one-line change in `ui/src/state.ts`.
-   - **If we skip it:** It is rare, but it happens exactly when recovery matters. The run fails with a confusing message.
+2. **`evalgen` may accept tests that `go fix` flags** (`cmd/evalgen/main.go:194-199`)
+   - **What this is:** `check` runs `go vet` and `go fix -diff` and treats only a non-zero exit as failure. The repo's own rule in `AGENTS.md` says `go fix -diff` "must print nothing". The rule names the output, not the exit code.
+   - **Problem:** I could not run `go fix`. As I understand it, `go fix -diff` prints the diffs and still exits 0. If so, tests that need changes pass this check, and `provenance.json` and the README claim they were checked.
+   - **Fix:** Fail when `out != ""` as well as when `err != nil`, for the `fix` command. This is the same pattern the `gofmt` line above it already uses.
+   - **If we skip it:** `evalgen` can install tests that break the repo's own Go standard without noticing.
 
-3. **The "fails on a do-nothing program" check can pass when zero tests ran** (`cmd/evalgen/main.go:236-248`)
-   - **What this is:** `evalgen` builds an empty stub program and requires at least 80% of the hidden tests to fail on it. This is the main guard against tests that check nothing.
-   - **Problem:** If the stub does not build, `TestMain` exits before any test runs. Then `stubFailed` and `stubPassed` are both 0. `0 < 0.8*0` is false, so the check passes with nothing proven. The three `os.MkdirAll` and `os.WriteFile` calls on lines 241-243 also ignore their errors.
-   - **Fix:** Check `stubPassed+stubFailed == 0` and return an error. Check the errors from the three stub writes.
-   - **If we skip it:** A broken setup can approve eval tests that were never run against the stub.
+3. **The phase review can read a mix of old and new code** (`cmd/phasereview/main.go:128-146`, `AGENTS.md:32-37`)
+   - **What this is:** `describeChange` builds the diff with `git diff base HEAD`. That covers committed work only. The reviewer's `Read`, `Glob` and `Grep` tools read the working tree.
+   - **Problem:** The `AGENTS.md` step says "fix every finding, run the review again". A developer who fixes the code and reruns before committing gives the reviewer the old diff and the new files. The verdict then describes neither version.
+   - **Fix:** In `review`, run `git status --porcelain` and return an error ("commit your changes first") if it prints anything. Add "Commit the fixes, then run it again" to step 3 of `AGENTS.md`.
+   - **If we skip it:** A review can say "Ship." about code that was never reviewed.
 
-4. **Risky logic has no test** (`internal/event/store.go:311-321,362-401`, `cmd/evalgen/main.go:208-277`)
-   - **What this is:** There are three gaps:
-     - `Store.Subscribe` drops a slow reader, and `Store.Runs` joins events to build run summaries. Neither has a test.
-     - `evalgen`'s `check`, `testCounts` and `install` decide whether a model's tests are trusted. Nothing tests them.
-     - Finding 2 has no test either.
-   - **Problem:** A change to any of these breaks silently. For example, if the drop-slow-reader branch were removed, one stalled browser tab would block `Append` for every run.
-   - **Fix:** Add three small tests:
-     - Fill a subscriber past 256 events and expect the channel to close.
-     - Call `Runs` on a finished run and a running run.
-     - Call `testCounts` on a fixture `go test -json` output with zero tests, one fail and one pass.
-     - After fixing finding 2, add a runner test that interrupts a plan node after `graph_updated` and expects the run to resume.
-   - **If we skip it:** The parts that guard quality and data are the parts nobody checks.
-
-5. **Modern Go guideline `json_v2` is not followed** (`internal/event/event.go:10`, `store.go:4`, `internal/server/server.go:7`, `internal/claude/claude.go:7`, `cmd/evalgen/main.go:16`, `cmd/factory/main.go:12`, `cmd/gen-ts/main.go:7`, `standards/standards.go:10`)
-   - **What this is:** The standards say new JSON code in Go 1.27 uses `encoding/json/v2`. All of this code is new.
-   - **Problem:** Every file imports `encoding/json`. No comment says why. One real reason exists: v2's `omitempty` keeps `0`. So `attempt,omitempty` and `retries,omitempty` would start to appear on the wire and change the UI's types. Nobody wrote that down.
-   - **Fix:** Either move to v2 and change those int fields to `omitzero`, then regenerate the UI types. Or add one line to `AGENTS.md` project rules saying "we keep `encoding/json` because v2 changes `omitempty` for ints; revisit in phase N".
-   - **If we skip it:** The next reviewer reports the same finding again, and builders have no rule to follow.
-
-6. **Three more modern Go guidelines are missed** (`cmd/factory/main.go:90-95`, `internal/server/server.go:140-141`, `internal/event/event.go:116`)
-   - **What this is:** The code does by hand what the standard library already does.
-   - **Problem:** There are three cases:
-     - `go func() { <-ctx.Done(); … srv.Shutdown }()` is the `context_after_func` case. Use `context.AfterFunc(ctx, …)`.
-     - `time.NewTicker` plus `defer tick.Stop()` is the `time_tick_gc` case. Use `time.Tick(heartbeat)`.
-     - `Decode[T](e Event)` is a package-level generic that belongs to `Event`. This is the `generic_methods` case. Make it a method.
-   - **Fix:** Apply the three one-line changes. The `Decode` change touches the callers in `event.go` only.
-   - **If we skip it:** The code carries a few extra lines and the repo breaks its own standards.
-
-7. **The reviewer's "read-only" Bash can write files** (`cmd/phasereview/main.go:84-86`)
-   - **What this is:** `phasereview` allows `Bash(git diff *)`, `git log *` and `git show *`. The comment says this is read-only.
-   - **Problem:** `git diff --output=<path>` writes the diff to any path the user can write. The `*` wildcard allows it. A reviewer model that is tricked by text in the diff could overwrite a file.
-   - **Fix:** Run `git diff` and `git log` in Go and put the text in the prompt. Then drop `Bash` from `Tools` and delete the `Allow` list. For very large diffs, keep Bash but add a deny rule for `--output`.
-   - **If we skip it:** The "read-only" promise is false, though the risk is low today.
+4. **`event.New` drops a payload that does not encode** (`internal/event/event.go:90-97`)
+   - **What this is:** `New` calls `json.Marshal(data)` and ignores the error. The comment says the payloads hold only simple types.
+   - **Problem:** `encoding/json/v2` rejects invalid UTF-8 by default. The `csvq` reference needs `AllowInvalidUTF8` for this reason. A log line or error text with a stray `0xff` byte, for example from a real executor's output, makes `Marshal` fail. The event is then stored with `Data` set to nil. In the UI, `e.data.line` then throws and the page breaks. Phase 0's fake scripts come from YAML, so it cannot happen yet.
+   - **Fix:** Have `New` replace invalid bytes with `strings.ToValidUTF8` for the strings it holds. Or make it return an error that the callers pass on. Do not store an event without its data.
+   - **If we skip it:** The first binary byte in executor output hides an event and crashes the UI.
 
 ## Nice to have
 
-8. **`Runs()` scans the whole events table on every poll** (`internal/event/store.go:362-368`, `ui/src/App.tsx:22`)
-   - **What this is:** The UI asks for the run list every 3 seconds. `Runs` finds `run_created` rows by `type`, and there is no index on `type`.
-   - **Problem:** The cost grows with every `node_log` line ever written. It is fine for a long while at one user.
-   - **Fix:** Add `CREATE INDEX IF NOT EXISTS events_by_type ON events (type, run) WHERE type IN ('run_created','run_finished')`.
-   - **If we skip it:** Polling slows down after thousands of logged lines. It matters only much later.
+5. **The UI refolds the whole log for every new event** (`ui/src/App.tsx:36-49,57-58`)
+   - **What this is:** `useEvents` copies the array with `[...prev, e]`. `fold(shown)` then rebuilds the run from event 1.
+   - **Problem:** Work grows with the square of the event count. A run with 20,000 log events does about 200 million steps in total, so the page stalls. It is fine for the roughly 50 events of the demo.
+   - **Fix:** In live mode, keep the `RunView` in state and call `apply(run, e)` once per event. Use `fold` only for replay.
+   - **If we skip it:** Phase 1 runs with streamed agent logs make the UI slow.
 
-9. **Temp file leaks when `phasereview` exits with an error** (`cmd/phasereview/main.go:66,109`)
-   - **What this is:** The reviewer's system prompt is written to a temp file, and `defer os.Remove` is meant to delete it.
-   - **Problem:** `os.Exit(1)` and `log.Fatal` skip deferred calls. Every review that does not end in "Ship." leaves a file in `/tmp`.
-   - **Fix:** Move the work into `run() int` and call `os.Exit(run())` in `main`. Alternatively, remove the file before calling `os.Exit`.
-   - **If we skip it:** A few small files pile up in `/tmp`.
+6. **The phase review includes the previous review report** (`cmd/phasereview/main.go:35`)
+   - **What this is:** `skipped` lists paths that the diff leaves out.
+   - **Problem:** `docs/reviews/` is not in the list. A rerun gives the reviewer its own earlier findings, which costs tokens and may lead it to repeat them.
+   - **Fix:** Add `"docs/reviews"` to `skipped`.
+   - **If we skip it:** Reruns cost more and repeat old findings.
 
-10. **`install` deletes the good tests before it copies the new ones** (`cmd/evalgen/main.go:280-304`)
-    - **What this is:** After the checks pass, `install` removes `hidden/` and `reference/` in the repo, then copies the new files in.
-    - **Problem:** If a copy fails half-way, or the in-place test on line 181 fails, the old tests are already gone and the new ones are bad. Git can restore them only if they were committed.
-    - **Fix:** Copy to a temp folder inside `dir` and rename it over the old folder. Or run the in-place test before you write `provenance.json`.
-    - **If we skip it:** A rare failure costs you the last good eval tests unless they were committed.
-
-11. **Shutdown closes the database while workers may still write** (`cmd/factory/main.go:80,100`, `internal/runner/runner.go:213-223`)
-    - **What this is:** `Runner.Wait` waits only for the `drive` goroutines. The node workers are separate goroutines.
-    - **Problem:** On Ctrl-C the store closes while a worker is still returning from `exec.Run`. A last `log` call then fails with "drop log line". Today this is only noise. With a real executor, worker processes can outlive the runner.
-    - **Fix:** Start workers with `r.wg.Go(...)` so `Wait` covers them.
-    - **If we skip it:** You see a warning on shutdown now, and orphan processes later.
+7. **A failed post-install test leaves the new tests in place** (`cmd/evalgen/main.go:176-184`)
+   - **What this is:** The staging folder protects against a failed copy. After `install`, `generate` runs the tests once more. This step exists because `install` rewrites the import paths.
+   - **Problem:** If that run fails, the old tests are already gone and the new files stay. Only git can bring the old ones back.
+   - **Fix:** Rewrite the import paths in the staging copy and run the test on it before the renames. This is a small move of the existing code.
+   - **If we skip it:** A rare failure costs the last good eval tests.
 
 ## Prose
 
-12. **`AGENTS.md` points at a file that does not exist** (`AGENTS.md:19-21`)
-    - **What this is:** The "before you call a change done" step tells agents to read the ponytail-review skill at `.claude/skills/ponytail-review/SKILL.md`.
-    - **Problem:** The repo has no `.claude/` folder. The skill lives at `standards/vendor/ponytail/skills/ponytail-review/SKILL.md`. An agent that follows the text finds nothing.
-    - **Fix:** Use the real path. Or say "run `go run ./cmd/phasereview`".
-    - **If we skip it:** Agents skip the review step or invent their own.
+8. **British spelling** (`Software Factory Plan.md:262`, `Software Factory Plan.html:861`)
+   - **What this is:** The "Known gaps" list says "the three defences".
+   - **Problem:** The rules call for American English. Write "defenses".
+   - **Fix:** Change the word in both files.
+   - **If we skip it:** The plan mixes two spelling styles.
 
-13. **README says "phase 0 is done" before the phase review passed** (`README.md:9`)
-    - **What this is:** The status line says phase 0 is done.
-    - **Problem:** `AGENTS.md:24-36` says a phase is not done until `docs/reviews/phase-0.md` exists with the verdict "Ship." That file does not exist.
-    - **Fix:** Write "phase 0 (skeleton) is built and waits for its review." Change it after the review passes.
-    - **If we skip it:** The README states something the repo's own rule says is not yet true.
+9. **"fold" is jargon and the README never defines it** (`README.md:44,56`)
+   - **What this is:** The README says "the fold from events to state" and "the UI's fold". The word comes from functional programming. It is also the name of the `Fold` function in `internal/event`.
+   - **Problem:** A reader who does not know the term has no way to learn it from the README. The comment in `internal/event/event.go:97` has a similar stock phrase: "a crash cannot fall between the two".
+   - **Fix:** Write "the code that rebuilds state from events (called a fold)" once. In the `event.go` comment, write "so a crash cannot leave one write done and the other missing".
+   - **If we skip it:** Small. A new reader stops at the main idea of the design.
 
-14. **A stock phrase where a plain one is better** (`evals/README.md:22`, `cmd/evalgen/main.go:3`)
-    - **What this is:** Both texts explain why the test author must be a different model from the builders.
-    - **Problem:** "blind spots" is a worn-out figure of speech. The reader has to guess what it means.
-    - **Fix:** Write "so the tests do not repeat the builders' mistakes" in both places.
-    - **If we skip it:** Small. It is the one place where the key idea of the eval design is stated loosely.
+Verdict: fix 1, 2, 3, 4, 8 and 9 first.
 
-Verdict: fix 1, 2, 3, 4, 5, 6, 7, 12 and 13 first, then rerun the phase review. Findings 8 to 11 and 14 can wait.
-
-Not checked: I did not run `go vet`, `go test -race`, `go fix -diff` or `npm run build`, and I could not confirm the Go version on this machine. I did not confirm that the Claude CLI accepts `--safe-mode` and `--permission-prompts none`. I did not read `ui/src/GraphView.tsx`, the CSS, the `wordfreq` and `csvq` hidden tests, `Software Factory Plan.html`, or the `graph_test.go` and `guardrails_test.go` files.
+Not checked: I did not run any command, so I did not check `go fix -diff` exit behavior (finding 2), that `Event.Decode[T]` compiles as a generic method, or the Node version for the UI. I did not read the model-written eval tests and `assumptions.md` files for prose. I did not check whether the `Software Factory Plan.md` and `.html` have drifted apart. `evalgen` runs the model's code with no sandbox, as the plan's "Known gaps" already says for the factory.

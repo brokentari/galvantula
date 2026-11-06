@@ -7,6 +7,7 @@ import (
 	"encoding/json/v2"
 	"fmt"
 	"log/slog"
+	"mime"
 	"net/http"
 	"strconv"
 	"time"
@@ -65,8 +66,7 @@ func (s *server) listRuns(w http.ResponseWriter, _ *http.Request) {
 
 func (s *server) startRun(w http.ResponseWriter, r *http.Request) {
 	var req StartRequest
-	if err := json.UnmarshalRead(http.MaxBytesReader(w, r.Body, maxBody), &req); err != nil {
-		http.Error(w, "bad request body: "+err.Error(), http.StatusBadRequest)
+	if !readJSON(w, r, &req) {
 		return
 	}
 	g, err := graph.Parse([]byte(req.Graph))
@@ -84,8 +84,7 @@ func (s *server) startRun(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) decide(w http.ResponseWriter, r *http.Request) {
 	var req DecideRequest
-	if err := json.UnmarshalRead(http.MaxBytesReader(w, r.Body, maxBody), &req); err != nil {
-		http.Error(w, "bad request body: "+err.Error(), http.StatusBadRequest)
+	if !readJSON(w, r, &req) {
 		return
 	}
 	if err := s.runner.Decide(r.PathValue("run"), r.PathValue("node"), req.Approved, req.Notes); err != nil {
@@ -162,6 +161,22 @@ func (s *server) streamEvents(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+}
+
+// readJSON decodes a JSON body of at most maxBody bytes. It refuses any
+// other content type: a web page can send text/plain to localhost without
+// asking the browser first, but application/json needs a preflight that
+// this server never answers.
+func readJSON(w http.ResponseWriter, r *http.Request, v any) bool {
+	if mt, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type")); mt != "application/json" {
+		http.Error(w, "Content-Type must be application/json", http.StatusUnsupportedMediaType)
+		return false
+	}
+	if err := json.UnmarshalRead(http.MaxBytesReader(w, r.Body, maxBody), v); err != nil {
+		http.Error(w, "bad request body: "+err.Error(), http.StatusBadRequest)
+		return false
+	}
+	return true
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

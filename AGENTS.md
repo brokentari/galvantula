@@ -31,8 +31,8 @@ its code and prose:
    The reviewer model from `guardrails.yaml` follows ponytail-review, checks
    Go against the modern Go guidelines, and checks prose against the Orwell
    rules. It writes `docs/reviews/phase-N.md`.
-3. Fix every Must fix, Should fix and Prose finding. Run the review again
-   until the verdict is "Ship."
+3. Fix every Must fix, Should fix and Prose finding. Commit the fixes, then
+   run the review again until the verdict is "Ship."
 4. Commit the review file with the phase.
 
 ## Evals

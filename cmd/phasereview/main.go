@@ -33,7 +33,7 @@ const (
 )
 
 // skipped are generated or vendored paths that the review leaves out.
-var skipped = []string{"ui/src/gen", "ui/package-lock.json", "go.sum", "standards/vendor"}
+var skipped = []string{"ui/src/gen", "ui/package-lock.json", "go.sum", "standards/vendor", "docs/reviews"}
 
 const instructions = `You review a change in this repository before its phase is called done. Follow the ponytail-review skill below, with two additions:
 
@@ -74,6 +74,11 @@ func review(phase, base, rails string) error {
 	skill, err := standards.Review()
 	if err != nil {
 		return err
+	}
+	// The diff covers commits, but the reviewer reads the working tree, so
+	// the two must match.
+	if dirty, err := git("status", "--porcelain"); err != nil || dirty != "" {
+		return errors.Join(err, errors.New("commit your changes first, so the reviewer sees what the diff says"))
 	}
 	head, err := git("rev-parse", "--short", "HEAD")
 	if err != nil {

@@ -41,7 +41,7 @@ Use **Replay** and the slider to step through any run, event by event.
 | `graphs/factory.yaml` | the outer factory graph |
 | `fakes/factory.yaml` | the fake executor's script for that graph |
 | `internal/graph` | graph types, validation, and filling a slot with a plan's nodes |
-| `internal/event` | event types, the SQLite event log, and the fold from events to state |
+| `internal/event` | event types, the SQLite event log, and the code that rebuilds a run's state from its events |
 | `internal/runner` | the runtime: scheduling, worker limit, retries, gates, resume |
 | `internal/executor` | the executor interface and the fake executor |
 | `internal/server` | HTTP API and the server-sent event stream |
@@ -53,8 +53,8 @@ Use **Replay** and the slider to step through any run, event by event.
 | `evals/` | eval specs with hidden tests; see [evals/README.md](evals/README.md) |
 
 The event log is the only state. Each event records the runtime's decisions,
-such as whether a failed node will retry. So the UI's fold (`ui/src/state.ts`)
-is a plain mapping with no rules of its own.
+such as whether a failed node will retry. So the UI code that rebuilds state
+from events (`ui/src/state.ts`) is a plain mapping with no rules of its own.
 
 ## Standards and models
 

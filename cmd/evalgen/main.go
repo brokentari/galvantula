@@ -178,10 +178,6 @@ func generate(ctx context.Context, g guardrails.Guardrails, dir string, retries 
 	if err := os.WriteFile(filepath.Join(dir, "provenance.json"), append(data, '\n'), 0o644); err != nil {
 		return err
 	}
-	// The import paths changed on the way in, so check once more in place.
-	if out, err := goCmd(".", nil, "test", "-count=1", "./"+filepath.ToSlash(dir)+"/hidden/"); err != nil {
-		return fmt.Errorf("tests fail after install:\n%s", out)
-	}
 	log.Printf("%s: done: %d tests, %d fail on a stub, $%.2f", name, p.Tests, p.StubFailures, p.CostUSD)
 	return nil
 }
@@ -217,6 +213,7 @@ func check(work, name string, kit []byte, p *provenance) error {
 	if out, err := run(work, nil, "gofmt", "-l", "."); err != nil || out != "" {
 		errs = append(errs, fmt.Errorf("gofmt -l lists files that need formatting:\n%s", out))
 	}
+	// go fix -diff exits non-zero when it has a change to suggest (go help fix).
 	for _, args := range [][]string{{"vet", "./..."}, {"fix", "-diff", "./..."}} {
 		if out, err := goCmd(work, nil, args...); err != nil {
 			errs = append(errs, fmt.Errorf("go %s:\n%s", strings.Join(args, " "), out))
@@ -292,23 +289,41 @@ func countTests(out string) (passed, failed int, output string) {
 	return passed, failed, tail(text.String(), 60)
 }
 
-// install copies the generated files into the repo and fixes import paths.
-// It copies into a staging folder first and then renames each part into
-// place, so a failed copy leaves the old tests as they were.
+// install moves the generated files into the repo, fixing import paths on
+// the way. It keeps the old files aside until the tests pass in place, and
+// puts them back if they do not.
 func install(work, dir, name string) error {
 	stage, err := os.MkdirTemp(dir, ".evalgen-")
 	if err != nil {
 		return err
 	}
 	defer os.RemoveAll(stage)
-	if err := copyTree(filepath.Join(work, name), stage); err != nil {
+	fresh, old := filepath.Join(stage, "new"), filepath.Join(stage, "old")
+	if err := copyTree(filepath.Join(work, name), fresh); err != nil {
 		return err
 	}
+	if err := os.Mkdir(old, 0o755); err != nil {
+		return err
+	}
+	if err := swap(dir, old); err != nil {
+		return err
+	}
+	if err := swap(fresh, dir); err != nil {
+		return errors.Join(err, swap(old, dir))
+	}
+	if out, err := goCmd(".", nil, "test", "-count=1", "./"+filepath.ToSlash(dir)+"/hidden/"); err != nil {
+		return errors.Join(fmt.Errorf("tests fail in place, so the old tests are back:\n%s", out), swap(old, dir))
+	}
+	return nil
+}
+
+// swap moves each generated part from one folder to another, replacing what is there.
+func swap(from, to string) error {
 	for _, part := range []string{"hidden", "reference", "assumptions.md"} {
-		if err := os.RemoveAll(filepath.Join(dir, part)); err != nil {
+		if err := os.RemoveAll(filepath.Join(to, part)); err != nil {
 			return err
 		}
-		if err := os.Rename(filepath.Join(stage, part), filepath.Join(dir, part)); err != nil {
+		if err := os.Rename(filepath.Join(from, part), filepath.Join(to, part)); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return err
 		}
 	}

@@ -107,3 +107,37 @@ func TestStreamAndDecide(t *testing.T) {
 		t.Errorf("unknown run: %s, want 404", resp.Status)
 	}
 }
+
+func TestRejectsUnsafeRequests(t *testing.T) {
+	store, err := event.Open(filepath.Join(t.TempDir(), "events.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	srv := httptest.NewServer(New(store, runner.New(t.Context(), store, 1), ""))
+	defer srv.Close()
+
+	tests := []struct {
+		name, contentType, body string
+		want                    int
+	}{
+		// A web page can send text/plain to localhost with no preflight.
+		{"text/plain from a web page", "text/plain", `{"graph": "name: g"}`, http.StatusUnsupportedMediaType},
+		{"body over the limit", "application/json", `{"graph": "` + strings.Repeat("x", maxBody) + `"}`, http.StatusBadRequest},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resp, err := http.Post(srv.URL+"/api/runs", tt.contentType, strings.NewReader(tt.body))
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp.Body.Close()
+			if resp.StatusCode != tt.want {
+				t.Errorf("got %s, want %d", resp.Status, tt.want)
+			}
+		})
+	}
+	if runs, _ := store.Runs(); len(runs) != 0 {
+		t.Errorf("a refused request started %d runs", len(runs))
+	}
+}
