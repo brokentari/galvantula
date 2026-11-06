@@ -152,6 +152,9 @@ func runEvals(args []string) error {
 	return nil
 }
 
+// pollEvery is how often evalOnce reads the run's events. Tests shorten it.
+var pollEvery = 5 * time.Second
+
 // evalOnce starts one run, waits for it, and scores its product.
 func evalOnce(store *event.Store, addr, root, dir, g string) (evalResult, error) {
 	spec, err := os.ReadFile(filepath.Join(dir, "spec.md"))
@@ -166,7 +169,7 @@ func evalOnce(store *event.Store, addr, root, dir, g string) (evalResult, error)
 	var evs []event.Event
 	seen, last := 0, time.Now()
 	for {
-		time.Sleep(5 * time.Second)
+		time.Sleep(pollEvery)
 		if evs, err = store.Events(id, 0); err != nil {
 			return evalResult{Run: id}, err
 		}

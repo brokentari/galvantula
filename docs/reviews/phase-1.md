@@ -1,47 +1,33 @@
 # Review: phase-1
 
-Reviewer: claude-sonnet-5-5 at high effort, in a new session. Range: 6189377..fdc2085. Date: 2026-11-06. Cost: $0.61.
+Reviewer: claude-sonnet-5-5 at high effort, in a new session. Range: 6189377..b86950c. Date: 2026-11-06. Cost: $0.58.
 
-What this change does: It adds phase 1 of the factory. One Claude Code agent builds a spec inside a bubblewrap sandbox, and the runtime checks, commits and merges its work. The change also adds budgets, retry and backoff rules, a usage-limit stop, a `factory eval` command that scores runs with hidden tests, and cost display in the UI. I assumed a single local user running one server and a few runs at a time, as the README says.
+**What this change does:** It adds phase 1 of the factory. One Claude Code agent runs inside a bubblewrap sandbox (a Linux tool that hides the host's files). It works in its own git worktree, and a check decides whether its work merges into the product repo. The change also adds spending and time limits, retry and backoff rules, and a usage-limit stop. It adds `factory eval`, which runs each eval spec N times, scores the products with hidden tests, and records the results. The UI now shows cost.
 
-I could not run any code, so Go tool behavior below comes from reading the diff and from knowledge of the tools.
-
-### Must fix
-
-1. **A run where the agent builds nothing counts as a success** (`internal/executor/claude.go:L184-195`, the `check` function)
-   - **What this is:** After the agent exits, `check` runs `gofmt -l`, `go vet`, `go fix -diff`, `go build` and `go test` on the worktree. If all pass, the runtime commits and merges, and the node succeeds.
-   - **Problem:** The module has only `go.mod` and no Go files, and I believe all five commands exit 0 in that case. They only print "matched no packages" or "no packages to test". The agent can end after a refusal, a clarifying question, or only writing `NOTES.md`. In that case `CommitAll` finds little or nothing, the merge is a no-op, and the run is marked **succeeded** with no product. The agent's cost is charged. Only the eval's hidden tests would catch it. A normal `factory start` run reports success.
-   - **Fix:** Add a first step to `check` that fails when `go list ./...` prints no packages. For example, run it in the sandbox and add "the agent wrote no Go package" to `errs` if the output is empty. Add one test with `fakeAgent(t, "")` that expects a check failure, which also counts toward retries.
-   - **If we skip it:** An empty run shows green in the UI and in `runs/<run>/repo`, and the user finds out only when they open the product.
+I assumed the load in the README: one person, one run at a time, and one agent node per run in `graphs/phase1.yaml`.
 
 ### Should fix
 
-2. **Two failure paths in `claude.Run` have no test** (`internal/claude/claude.go:L110-117`, `internal/executor/claude.go:L169-176`)
-   - **What this is:** Two decisions control paid retries. First, claude printing a limit message on stderr with no result line becomes `ErrUsageLimit` and never retries. Second, a crash with no result becomes `ErrNoResult`, which the executor turns into an infra failure with no cost.
-   - **Problem:** Tests cover a limit message inside the result line and a timeout. Nothing covers the stderr-only limit or the crash-to-infra mapping. A change to either would turn "never buy more usage" into up to 5 retries, or turn a crash into a counted task failure. No test would fail.
-   - **Fix:** Add two table rows. In `internal/claude/claude_test.go`, use a script that runs `echo 'usage limit reached' >&2; exit 1` and expect `ErrUsageLimit`. In `TestAgentFailureClasses`, use `fakeAgent(t, "exit 3")` and expect `IsInfra(err)` with cost 0.
-   - **If we skip it:** A later edit to `limitPhrases` or to the error switch can break the "never retry on a limit" rule without any test failing.
+1. **The check can pass on files that never reach the product** (`internal/executor/claude.go:L175-186`, `internal/workspace/workspace.go:L28-37`)
+   - **What this is:** After the agent finishes, the check runs gofmt, vet, build and tests on the files on disk. Then `CommitAll` runs `git add -A` and merges the commit into main.
+   - **Problem:** `git add -A` skips files that a `.gitignore` matches. The agent may write a `.gitignore`. A common line is the binary's name, such as `wordfreq`, and that also ignores the folder `cmd/wordfreq/`. The check passes, because the files are on disk. The commit leaves them out. The run ends "succeeded" with a product that has no program. The hidden tests would catch it in an eval. A real run would not.
+   - **Fix:** After the build step in `check`, fail if git ignores any `.go` file. For example, list `git ls-files --others --ignored --exclude-standard -z` and fail on any name ending in `.go`. Add one test: the agent writes `main.go` and `.gitignore` containing `main.go`, and the check must fail.
+   - **If we skip it:** Some runs report success with an empty or partial product. Nothing tells the user.
+
+2. **The phase's "Done when" is not fully met, and the results come from older code** (`Software Factory Plan.html:L797`, `README.md` status, `evals/results/2026-11-06.jsonl`)
+   - **What this is:** The plan says the phase is done when at least 8 of 10 runs pass per eval, "under a median cost you set after the first runs". The README says the first batch passed 31 of 31 runs.
+   - **Problem:** No file sets a median-cost limit, so that part of the criterion cannot be checked. The batch was committed in `4f02b54`, before the later fixes: the check mounts the worktree read-only, hidden tests get a smaller sandbox mount, and binaries are removed before the check. Its pass rate describes the old code, not the code you ship.
+   - **Fix:** Pick a median cost, for example in `guardrails.yaml` or the README (the batch's medians are about $0.10 to $0.17). Run a short batch on the final code, such as `factory eval -n 3 ...`. Record it and name the commit it ran on.
+   - **If we skip it:** The README's "31 of 31" claim and the "Done when" line rest on code that is no longer the code in the repo.
 
 ### Nice to have
 
-3. **`factory eval` can hang forever on a stuck server** (`cmd/factory/main.go`, `startRun`)
-   - **What this is:** `startRun` calls `http.Post`, which uses the default client with no timeout.
-   - **Problem:** If the server accepts the connection and never answers, the eval waits forever and holds a parallel slot. The quiet-run limit only starts after the run exists.
-   - **Fix:** Use `(&http.Client{Timeout: 30 * time.Second}).Post(...)`.
-   - **If we skip it:** An eval batch can hang with no message.
+3. **A test sleeps 5 seconds for nothing** (`cmd/factory/eval.go:L141`, `cmd/factory/eval_test.go` `TestEvalStopsAtUsageLimit`)
+   - **What this is:** `evalOnce` waits 5 seconds before it reads the log for the first time.
+   - **Problem:** The test's fake server has already finished the run, so each test pays the full 5 seconds.
+   - **Fix:** Make the poll interval a package variable (`var pollEvery = 5 * time.Second`). The test sets it to 10 ms.
+   - **If we skip it:** The suite is 5 seconds slower. Nothing else breaks.
 
-### Prose
+Verdict: fix 1 and 2 first.
 
-I checked the README, the code comments, the guardrails comments, the plan text edits and the UI text. They are short, active and consistent, and I found no findings. The result counts in the README (31 runs: 11 wordfreq, 10 todo, 10 csvq) match `evals/results/2026-11-06.jsonl`.
-
-Checked and fine:
-- The local API's cross-site and DNS-rebinding guards.
-- The credential going through the environment and not the command line.
-- The planted `.git` handling in host git.
-- The frozen-file check.
-- `ui/src/gen/events.ts`, which is guarded by a test.
-- No leftover references to the deleted `Software Factory Plan.md`.
-
-Verdict: fix 1 first.
-Lean: no lean findings.
-Not checked: I did not run bwrap, Go or the UI. Finding 1 depends on `go vet`, `go build` and `go test` exiting 0 on a module with no packages, and I am not certain of that. Confirm it with a one-line `fakeAgent(t, "")` test.
+Not checked: I did not run any tests or bwrap. The sandbox, git and `go fix` behavior come from reading the code and the tests. I did not read `docs/reviews/phase-1.md`.

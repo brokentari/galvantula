@@ -72,6 +72,8 @@ func TestEvalStopsAtUsageLimit(t *testing.T) {
 		t.Fatal(err)
 	}
 	inTempRepo(t, repo)
+	pollEvery = 10 * time.Millisecond
+	t.Cleanup(func() { pollEvery = 5 * time.Second })
 	store, err := event.Open("f.db")
 	if err != nil {
 		t.Fatal(err)

@@ -29,10 +29,11 @@ func Open(dir string) (Repo, error) {
 	return r, err
 }
 
-// CommitAll commits every change in dir (the repo or one of its worktrees).
+// CommitAll commits every change in dir (the repo or one of its worktrees),
+// even files a .gitignore matches: main must get what the check saw.
 // It reports false if there was nothing to commit.
 func (r Repo) CommitAll(dir, msg string) (bool, error) {
-	if _, err := r.git(dir, "add", "-A"); err != nil {
+	if _, err := r.git(dir, "add", "-A", "--force"); err != nil {
 		return false, err
 	}
 	if _, err := r.git(dir, "diff", "--cached", "--quiet"); err == nil {
@@ -69,9 +70,9 @@ func (r Repo) Changed(dir string) ([]string, error) {
 	return names(out), err
 }
 
-// NewFiles lists files in dir that git does not track yet.
+// NewFiles lists files in dir that git does not track yet, ignored or not.
 func (r Repo) NewFiles(dir string) ([]string, error) {
-	out, err := r.git(dir, "ls-files", "--others", "--exclude-standard", "-z")
+	out, err := r.git(dir, "ls-files", "--others", "-z")
 	return names(out), err
 }
 
