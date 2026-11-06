@@ -151,7 +151,7 @@ func TestQuietRunsAreLost(t *testing.T) {
 			done := make(chan struct{})
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				g := graph.Graph{Name: "g", Nodes: []graph.Node{{ID: "build", Kind: graph.Agent}}}
-				appendTo(event.New("r-1", event.RunCreated, "", 0, event.RunCreatedData{Graph: g, Executor: "claude", Spec: "x"}))
+				appendTo(event.New("r-1", event.RunCreated, "", 0, event.RunCreatedData{Graph: g, Executor: "claude", Spec: "x", Commit: "abc1234"}))
 				appendTo(event.New("r-1", event.NodeStarted, "build", 1, nil))
 				if tt.logs >= 0 {
 					// Log for longer than checkGrace in total, but never pause that long.
@@ -183,6 +183,9 @@ func TestQuietRunsAreLost(t *testing.T) {
 			var r evalResult
 			if err := json.Unmarshal(bytes.TrimSpace(data), &r); err != nil {
 				t.Fatal(err)
+			}
+			if r.Commit != "abc1234" {
+				t.Errorf("result commit %q, want abc1234: a lost run must still name its code", r.Commit)
 			}
 			if r.Status != tt.wantStatus || !strings.Contains(r.Reason, tt.wantReason) {
 				t.Errorf("got status %q, reason %q; want %q and a reason with %q", r.Status, r.Reason, tt.wantStatus, tt.wantReason)

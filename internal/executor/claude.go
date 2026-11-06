@@ -114,7 +114,7 @@ func (c Claude) agent(ctx context.Context, repo workspace.Repo, t Task, log func
 	}
 	home := filepath.Join(run, "home", t.Node.ID)
 	sessions := filepath.Join(run, "sessions")
-	for _, dir := range []string{home, sessions, c.goCache(t.Run), c.goModCache()} {
+	for _, dir := range []string{home, sessions, c.goModCache()} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return Result{}, &InfraError{Err: err}
 		}
@@ -126,7 +126,14 @@ func (c Claude) agent(ctx context.Context, repo workspace.Repo, t Task, log func
 
 	role := c.Rails.Models.Implementer
 	bare := strings.HasPrefix(c.Auth, "ANTHROPIC_API_KEY=")
-	box := c.box(t.Run, wt, home, []string{c.Auth, "DISABLE_AUTOUPDATER=1"})
+	// A new build cache for each attempt: agent code runs during go test and
+	// could write build results that another run's check would then reuse.
+	cache, err := os.MkdirTemp("", "go-build")
+	if err != nil {
+		return Result{}, &InfraError{Err: err}
+	}
+	defer os.RemoveAll(cache)
+	box := c.box(cache, wt, home, []string{c.Auth, "DISABLE_AUTOUPDATER=1"})
 	box.RO = append(box.RO, bin)
 	opts := claude.Options{
 		Dir:          wt,
@@ -194,7 +201,7 @@ func (c Claude) agent(ctx context.Context, repo workspace.Repo, t Task, log func
 		return spent, &InfraError{Err: err}
 	}
 	log("check")
-	if err := c.check(ctx, repo, t.Run, wt); err != nil {
+	if err := c.check(ctx, repo, cache, wt); err != nil {
 		return spent, fmt.Errorf("check failed:\n%w", err)
 	}
 	if _, err := repo.CommitAll(wt, fmt.Sprintf("%s: attempt %d", t.Node.ID, t.Attempt)); err != nil {
@@ -256,7 +263,7 @@ func hasNUL(path string) (bool, error) {
 
 // check runs the factory's checks on a worktree. Build and test run the
 // agent's code, so they run in the sandbox too, without any credential.
-func (c Claude) check(ctx context.Context, repo workspace.Repo, run, wt string) error {
+func (c Claude) check(ctx context.Context, repo workspace.Repo, cache, wt string) error {
 	var errs []error
 	changed, err := repo.Changed(wt)
 	if err != nil {
@@ -270,7 +277,7 @@ func (c Claude) check(ctx context.Context, repo workspace.Repo, run, wt string) 
 		return &InfraError{Err: err}
 	}
 	defer os.RemoveAll(home)
-	box := c.box(run, wt, home, nil)
+	box := c.box(cache, wt, home, nil)
 	// The checks run the agent's code. It must not change what the runtime commits.
 	box.RW = slices.DeleteFunc(box.RW, func(p string) bool { return p == wt })
 	box.RO = append(box.RO, wt)
@@ -291,13 +298,14 @@ func (c Claude) check(ctx context.Context, repo workspace.Repo, run, wt string) 
 }
 
 // box is the sandbox for one worktree, with the Go settings the factory needs.
-func (c Claude) box(run, wt, home string, env []string) sandbox.Spec {
+func (c Claude) box(cache, wt, home string, env []string) sandbox.Spec {
 	return sandbox.Spec{
 		Dir:  wt,
-		RW:   []string{wt, home, c.goCache(run), c.goModCache()},
+		RW:   []string{wt, home, cache},
+		RO:   []string{c.goModCache()},
 		Home: home,
 		Env: slices.Concat(env, []string{
-			"GOCACHE=" + c.goCache(run),
+			"GOCACHE=" + cache,
 			"GOMODCACHE=" + c.goModCache(),
 			"GOFLAGS=-mod=readonly -buildvcs=false",
 			"GOPROXY=off",
@@ -307,12 +315,9 @@ func (c Claude) box(run, wt, home string, env []string) sandbox.Spec {
 	}
 }
 
-// The factory keeps its own Go caches, so agent code never writes to the
-// user's. Each run gets its own build cache: agent code runs during go test
-// and could write build results that another run's check would then reuse.
-// Nothing writes to the module cache, since GOPROXY is off, so runs share it.
-func (c Claude) goCache(run string) string { return filepath.Join(c.Root, run, ".cache", "go-build") }
-func (c Claude) goModCache() string        { return filepath.Join(c.Root, ".cache", "go-mod") }
+// goModCache is the factory's own Go module cache, mounted read-only:
+// GOPROXY is off and products have no dependencies, so nothing writes to it.
+func (c Claude) goModCache() string { return filepath.Join(c.Root, ".cache", "go-mod") }
 
 // claudeBin finds the real claude executable. Updates change its path, so
 // look it up on each attempt.

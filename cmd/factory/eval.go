@@ -190,7 +190,7 @@ func evalOnce(store *event.Store, addr, root, dir, g string) (evalResult, error)
 			seen, last = len(evs), time.Now()
 		}
 		if quiet := time.Since(last); quiet > time.Duration(st.Rails.Budget.NodeMinutes)*time.Minute+checkGrace {
-			return evalResult{Run: id}, fmt.Errorf("run %s logged nothing for %s; it may still be running and spending, so check the server", id, quiet.Round(time.Minute))
+			return evalResult{Run: id, Commit: st.Commit}, fmt.Errorf("run %s logged nothing for %s; it may still be running and spending, so check the server", id, quiet.Round(time.Minute))
 		}
 	}
 	r := evalResult{
