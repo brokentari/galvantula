@@ -2,6 +2,7 @@ package executor
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -36,6 +37,8 @@ type Claude struct {
 	// Auth holds the credential the sandboxed agent uses:
 	// CLAUDE_CODE_OAUTH_TOKEN=... or ANTHROPIC_API_KEY=...
 	Auth string
+
+	timeout time.Duration // replaces the node time limit in tests
 }
 
 const brief = `Build the program that spec.md describes, in this directory. AGENTS.md, which is part of your instructions, holds the rules for the code and its prose.
@@ -162,7 +165,7 @@ func (c Claude) agent(ctx context.Context, repo workspace.Repo, t Task, log func
 		}
 	}
 
-	limit := time.Duration(c.Rails.Budget.NodeMinutes) * time.Minute
+	limit := cmp.Or(c.timeout, time.Duration(c.Rails.Budget.NodeMinutes)*time.Minute)
 	attemptCtx, cancel := context.WithTimeout(ctx, limit)
 	defer cancel()
 	res, err := claude.Run(attemptCtx, opts)

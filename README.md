@@ -49,7 +49,8 @@ go run ./cmd/factory start -spec evals/wordfreq/spec.md graphs/phase1.yaml
 
 Each run's product is a git repo in `runs/<run>/repo`. The agent works in
 `runs/<run>/nodes/<node>`; the runtime commits and merges its work after the
-check passes. `guardrails.yaml` sets each attempt's spending and time limits.
+check passes. `guardrails.yaml` sets the spending and time limits for each
+attempt and for the whole run.
 
 To score the factory, run the evals against a running server:
 

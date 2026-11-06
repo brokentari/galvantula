@@ -45,6 +45,22 @@ func TestRunResults(t *testing.T) {
 	}
 }
 
+// A tool that claude started can outlive a cancel and keep stdout open.
+// Run must still return.
+func TestRunReturnsAfterCancelWithChildHoldingStdout(t *testing.T) {
+	fakeClaude(t, "sleep 60 &\nsleep 60\n")
+	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, err := Run(ctx, Options{Dir: t.TempDir(), Prompt: "x", Model: "m", Effort: "low", Mode: "dontAsk"})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("got %v, want the deadline", err)
+	}
+	if d := time.Since(start); d > 30*time.Second {
+		t.Errorf("Run took %s after the cancel", d)
+	}
+}
+
 // Without an API key, runs keep the user's login but turn off their
 // customizations; with one, they use --bare.
 func TestRunIsolation(t *testing.T) {

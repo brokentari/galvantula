@@ -4,9 +4,22 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
+
+// Other users on the host can read a command line, so a credential must
+// not be on it.
+func TestEnvIsNotOnTheCommandLine(t *testing.T) {
+	cmd := Command(t.Context(), Spec{Dir: "/w", Home: "/h", Env: []string{"TOKEN=secret"}}, "true")
+	if strings.Contains(strings.Join(cmd.Args, " "), "secret") {
+		t.Errorf("args %q hold the credential", cmd.Args)
+	}
+	if !slices.Contains(cmd.Env, "TOKEN=secret") {
+		t.Errorf("env %q lacks the credential", cmd.Env)
+	}
+}
 
 func TestSandboxHidesTheHost(t *testing.T) {
 	if _, err := exec.LookPath("bwrap"); err != nil {

@@ -1,11 +1,13 @@
 package executor
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/brokentari/galvantula/internal/graph"
 	"github.com/brokentari/galvantula/internal/guardrails"
@@ -158,6 +160,26 @@ func TestAgentGitDirIsIgnored(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(c.Root, "r", "repo", "main.go")); err != nil {
 		t.Errorf("main lacks main.go: %v", err)
+	}
+}
+
+// The class of a failed attempt decides whether the runner retries it, and
+// its cost counts toward the budget.
+func TestAgentFailureClasses(t *testing.T) {
+	c, run := setUpRun(t)
+	fakeAgent(t, `echo '{"type":"result","is_error":true,"result":"You have hit your usage limit"}'; exit 0`)
+	if _, err := run(Task{Node: impl, Attempt: 1}); !errors.As(err, new(*LimitError)) {
+		t.Errorf("usage limit: got %v, want a LimitError", err)
+	}
+
+	c.timeout = 500 * time.Millisecond
+	fakeAgent(t, "sleep 60")
+	res, err := c.Run(t.Context(), Task{Run: "r", Node: impl, Attempt: 2}, func(string) {})
+	if err == nil || IsInfra(err) || errors.As(err, new(*LimitError)) || !strings.Contains(err.Error(), "ran past") {
+		t.Errorf("timeout: got %v, want a task failure", err)
+	}
+	if res.CostUSD != c.Rails.Budget.NodeUSD {
+		t.Errorf("timeout: cost %v, want the node budget %v", res.CostUSD, c.Rails.Budget.NodeUSD)
 	}
 }
 

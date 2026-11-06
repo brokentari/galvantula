@@ -117,15 +117,22 @@ func Run(ctx context.Context, o Options) (Result, error) {
 	cmd.WaitDelay = 10 * time.Second // tools it started must not keep Run waiting after a cancel
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return Result{}, err
-	}
+	// Wait closes the pipe, and WaitDelay bounds Wait. So a tool that outlives
+	// claude and holds its stdout cannot keep read waiting.
+	stdout, pw := io.Pipe()
+	cmd.Stdout = pw
 	if err := cmd.Start(); err != nil {
 		return Result{}, fmt.Errorf("claude -p: %w", err)
 	}
+	waited := make(chan error, 1)
+	go func() {
+		err := cmd.Wait()
+		pw.Close()
+		waited <- err
+	}()
 	r, found := read(stdout, o.Log)
-	runErr := cmd.Wait()
+	io.Copy(io.Discard, stdout) // read can stop early on a bad line; let the copy finish
+	runErr := <-waited
 	if ctx.Err() != nil {
 		// A cancel kills the process, and Wait reports "signal: killed".
 		// Report the cancel instead, so callers do not treat it as a crash.

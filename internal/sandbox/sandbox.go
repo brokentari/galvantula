@@ -8,7 +8,6 @@ import (
 	"context"
 	"os/exec"
 	"slices"
-	"strings"
 	"time"
 )
 
@@ -27,7 +26,7 @@ const waitDelay = 5 * time.Second
 // Command returns name with args, wrapped in bwrap.
 func Command(ctx context.Context, s Spec, name string, args ...string) *exec.Cmd {
 	b := []string{
-		"--unshare-all", "--share-net", "--die-with-parent", "--new-session", "--clearenv",
+		"--unshare-all", "--share-net", "--die-with-parent", "--new-session",
 		"--ro-bind", "/usr", "/usr",
 		"--ro-bind", "/etc", "/etc",
 		"--symlink", "usr/bin", "/bin",
@@ -44,13 +43,11 @@ func Command(ctx context.Context, s Spec, name string, args ...string) *exec.Cmd
 	for _, p := range s.RW {
 		b = append(b, "--bind", p, p)
 	}
-	b = append(b, "--chdir", s.Dir, "--setenv", "HOME", s.Home, "--setenv", "PATH", "/usr/bin")
-	for _, kv := range s.Env {
-		k, v, _ := strings.Cut(kv, "=")
-		b = append(b, "--setenv", k, v)
-	}
-	b = append(b, "--", name)
+	b = append(b, "--chdir", s.Dir, "--", name)
 	cmd := exec.CommandContext(ctx, "bwrap", slices.Concat(b, args)...)
+	// bwrap passes its environment on. Other users can read a command line
+	// but not an environment, so a credential goes here, not in --setenv.
+	cmd.Env = append([]string{"HOME=" + s.Home, "PATH=/usr/bin"}, s.Env...)
 	cmd.WaitDelay = waitDelay
 	return cmd
 }

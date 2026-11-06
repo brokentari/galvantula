@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -115,8 +116,9 @@ func runEvals(args []string) error {
 				limited.Store(true)
 			}
 			if err != nil {
+				// A run the eval lost still counts, as a failure.
 				fmt.Fprintf(os.Stderr, "%s: %v\n", j.name, err)
-				return
+				r.At, r.Status, r.Reason, r.Pass = cmp.Or(r.At, time.Now()), "error", err.Error(), false
 			}
 			r.Eval, r.Graph, r.Standards = j.name, parsed.Name, hex.EncodeToString(sum[:8])
 			line, _ := json.Marshal(r)
@@ -160,10 +162,10 @@ func evalOnce(store *event.Store, addr, root, dir, g string) (evalResult, error)
 	for {
 		time.Sleep(5 * time.Second)
 		if evs, err = store.Events(id, 0); err != nil {
-			return evalResult{}, err
+			return evalResult{Run: id}, err
 		}
 		if st, err = event.Fold(evs); err != nil {
-			return evalResult{}, err
+			return evalResult{Run: id}, err
 		}
 		if st.Status != event.RunRunning {
 			break
@@ -173,7 +175,7 @@ func evalOnce(store *event.Store, addr, root, dir, g string) (evalResult, error)
 		}
 		// An attempt logs at least once per node time limit, and its check takes minutes, not more.
 		if quiet := time.Since(last); quiet > time.Duration(st.Rails.Budget.NodeMinutes+10)*time.Minute {
-			return evalResult{}, fmt.Errorf("run %s logged nothing for %s; check that the server still runs it", id, quiet.Round(time.Minute))
+			return evalResult{Run: id}, fmt.Errorf("run %s logged nothing for %s; check that the server still runs it", id, quiet.Round(time.Minute))
 		}
 	}
 	r := evalResult{
