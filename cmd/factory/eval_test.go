@@ -117,6 +117,80 @@ func TestEvalStopsAtUsageLimit(t *testing.T) {
 	}
 }
 
+// A run that logs nothing past its time limit is lost and recorded as an
+// error. A run that keeps logging is followed to its end, however long.
+func TestQuietRunsAreLost(t *testing.T) {
+	tests := []struct {
+		name       string
+		logs       int // node_log events before the run finishes; -1 never finishes
+		wantStatus string
+		wantReason string
+	}{
+		{"logs nothing", -1, "error", "logged nothing"},
+		{"keeps logging", 30, "failed", "gave up"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo, err := filepath.Abs(filepath.Join("..", ".."))
+			if err != nil {
+				t.Fatal(err)
+			}
+			inTempRepo(t, repo)
+			pollEvery, checkGrace = 10*time.Millisecond, 50*time.Millisecond
+			t.Cleanup(func() { pollEvery, checkGrace = 5*time.Second, 10*time.Minute })
+			store, err := event.Open("f.db")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer store.Close()
+			appendTo := func(e event.Event) {
+				if _, err := store.Append(e); err != nil {
+					t.Error(err)
+				}
+			}
+			done := make(chan struct{})
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				g := graph.Graph{Name: "g", Nodes: []graph.Node{{ID: "build", Kind: graph.Agent}}}
+				appendTo(event.New("r-1", event.RunCreated, "", 0, event.RunCreatedData{Graph: g, Executor: "claude", Spec: "x"}))
+				appendTo(event.New("r-1", event.NodeStarted, "build", 1, nil))
+				if tt.logs >= 0 {
+					// Log for longer than checkGrace in total, but never pause that long.
+					go func() {
+						defer close(done)
+						for range tt.logs {
+							time.Sleep(10 * time.Millisecond)
+							appendTo(event.New("r-1", event.NodeLog, "build", 1, event.NodeLogData{Line: "working"}))
+						}
+						appendTo(event.New("r-1", event.RunFinished, "", 0, event.RunFinishedData{Status: event.RunFailed, Reason: "gave up"}))
+					}()
+				} else {
+					close(done)
+				}
+				w.WriteHeader(http.StatusCreated)
+				fmt.Fprint(w, `{"id":"r-1"}`)
+			}))
+			defer srv.Close()
+			err = runEvals([]string{"-server", srv.URL, "-db", "f.db", "-runs", "runs", "-n", "1",
+				"-graph", filepath.Join(repo, "graphs", "phase1.yaml"), filepath.Join(repo, "evals", "wordfreq")})
+			<-done
+			if err != nil {
+				t.Fatal(err)
+			}
+			data, err := os.ReadFile(filepath.Join("evals", "results", time.Now().Format(time.DateOnly)+".jsonl"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var r evalResult
+			if err := json.Unmarshal(bytes.TrimSpace(data), &r); err != nil {
+				t.Fatal(err)
+			}
+			if r.Status != tt.wantStatus || !strings.Contains(r.Reason, tt.wantReason) {
+				t.Errorf("got status %q, reason %q; want %q and a reason with %q", r.Status, r.Reason, tt.wantStatus, tt.wantReason)
+			}
+		})
+	}
+}
+
 // inTempRepo moves to a new folder that holds what runEvals needs from
 // the repo root.
 func inTempRepo(t *testing.T, repo string) {

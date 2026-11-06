@@ -153,8 +153,14 @@ func runEvals(args []string) error {
 	return nil
 }
 
-// pollEvery is how often evalOnce reads the run's events. Tests shorten it.
-var pollEvery = 5 * time.Second
+var (
+	// pollEvery is how often evalOnce reads the run's events. Tests shorten it.
+	pollEvery = 5 * time.Second
+	// checkGrace is how long a run may log nothing beyond its node time
+	// limit before the eval calls it lost. The check logs nothing while it
+	// runs. Tests shorten it.
+	checkGrace = 10 * time.Minute
+)
 
 // evalOnce starts one run, waits for it, and scores its product.
 func evalOnce(store *event.Store, addr, root, dir, g string) (evalResult, error) {
@@ -183,9 +189,7 @@ func evalOnce(store *event.Store, addr, root, dir, g string) (evalResult, error)
 		if len(evs) > seen {
 			seen, last = len(evs), time.Now()
 		}
-		// The run is lost if it logs nothing for the node time limit plus 10 minutes.
-		// The 10 minutes cover the check, which logs nothing while it runs.
-		if quiet := time.Since(last); quiet > time.Duration(st.Rails.Budget.NodeMinutes+10)*time.Minute {
+		if quiet := time.Since(last); quiet > time.Duration(st.Rails.Budget.NodeMinutes)*time.Minute+checkGrace {
 			return evalResult{Run: id}, fmt.Errorf("run %s logged nothing for %s; it may still be running and spending, so check the server", id, quiet.Round(time.Minute))
 		}
 	}

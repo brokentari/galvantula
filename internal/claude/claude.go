@@ -131,7 +131,7 @@ func Run(ctx context.Context, o Options) (Result, error) {
 		waited <- err
 	}()
 	r, found := read(stdout, o.Log)
-	io.Copy(io.Discard, stdout) // read can stop early on a bad line; let the copy finish
+	io.Copy(io.Discard, stdout) // read stops early if one line passes 64 MB; drain the pipe so Wait can finish
 	runErr := <-waited
 	if ctx.Err() != nil {
 		// A cancel kills the process, and Wait reports "signal: killed".
