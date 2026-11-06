@@ -1,33 +1,31 @@
 # Review: phase-1
 
-Reviewer: claude-sonnet-5-5 at high effort, in a new session. Range: 6189377..b86950c. Date: 2026-11-06. Cost: $0.58.
+Reviewer: claude-sonnet-5-5 at high effort, in a new session. Range: 6189377..c25f963. Date: 2026-11-06. Cost: $0.64.
 
-**What this change does:** It adds phase 1 of the factory. One Claude Code agent runs inside a bubblewrap sandbox (a Linux tool that hides the host's files). It works in its own git worktree, and a check decides whether its work merges into the product repo. The change also adds spending and time limits, retry and backoff rules, and a usage-limit stop. It adds `factory eval`, which runs each eval spec N times, scores the products with hidden tests, and records the results. The UI now shows cost.
+What this change does: Phase 1 adds one sandboxed Claude Code agent node. It adds `factory eval`, which starts runs, scores each product with hidden tests and records the results. It also adds a workspace (a git repo with one worktree per agent node), spending limits, usage-limit stops, retry and resume rules, UI cost display, and the first 31-run results file. The last two commits set the $0.50 median-cost limit in the plan and note that the batch must run again on the final code.
 
-I assumed the load in the README: one person, one run at a time, and one agent node per run in `graphs/phase1.yaml`.
+I assumed one developer running the server locally and one eval at a time. The server rejects non-localhost Hosts and requires `application/json`, so the no-login API is covered for that load.
 
-### Should fix
+**Should fix**
 
-1. **The check can pass on files that never reach the product** (`internal/executor/claude.go:L175-186`, `internal/workspace/workspace.go:L28-37`)
-   - **What this is:** After the agent finishes, the check runs gofmt, vet, build and tests on the files on disk. Then `CommitAll` runs `git add -A` and merges the commit into main.
-   - **Problem:** `git add -A` skips files that a `.gitignore` matches. The agent may write a `.gitignore`. A common line is the binary's name, such as `wordfreq`, and that also ignores the folder `cmd/wordfreq/`. The check passes, because the files are on disk. The commit leaves them out. The run ends "succeeded" with a product that has no program. The hidden tests would catch it in an eval. A real run would not.
-   - **Fix:** After the build step in `check`, fail if git ignores any `.go` file. For example, list `git ls-files --others --ignored --exclude-standard -z` and fail on any name ending in `.go`. Add one test: the agent writes `main.go` and `.gitignore` containing `main.go`, and the check must fail.
-   - **If we skip it:** Some runs report success with an empty or partial product. Nothing tells the user.
+1. **Result lines do not say which code made them** (`cmd/factory/eval.go:L28-46`, `L103-109`, `README.md:L8-14`)
+   - **What this is:** Each run adds one line to `evals/results/<date>.jsonl`. The README says the 31 lines came from commit `4f02b54`, and tells you to run the batch again on the final code before phase 1 is done.
+   - **Problem:** A line records the graph name, the standards hash and the Claude version, but not the factory's commit. The file is named by date and opened in append mode. The final batch will almost certainly run today, so it lands in `2026-11-06.jsonl` after the 31 old lines. The file then holds 62 runs from two code versions, and nothing in it tells them apart. The README's "31 runs, commit 4f02b54" and the medians no longer match the file. The done criterion (8 of 10 pass, median under $0.50) would be judged on a mix of old and new runs.
+   - **Fix:** Add a `Commit string` field to `evalResult`. Fill it once per eval with `git rev-parse --short HEAD`, adding `-dirty` if `git status --porcelain` prints anything. The eval already requires the repo root, so git is available. Then move the old 31 lines to a name that shows their commit, or let the README point to the new batch by commit.
+   - **If we skip it:** The final batch cannot be told apart from the first. The proof that phase 1 is done is ambiguous, and someone has to sort it out by hand from timestamps.
 
-2. **The phase's "Done when" is not fully met, and the results come from older code** (`Software Factory Plan.html:L797`, `README.md` status, `evals/results/2026-11-06.jsonl`)
-   - **What this is:** The plan says the phase is done when at least 8 of 10 runs pass per eval, "under a median cost you set after the first runs". The README says the first batch passed 31 of 31 runs.
-   - **Problem:** No file sets a median-cost limit, so that part of the criterion cannot be checked. The batch was committed in `4f02b54`, before the later fixes: the check mounts the worktree read-only, hidden tests get a smaller sandbox mount, and binaries are removed before the check. Its pass rate describes the old code, not the code you ship.
-   - **Fix:** Pick a median cost, for example in `guardrails.yaml` or the README (the batch's medians are about $0.10 to $0.17). Run a short batch on the final code, such as `factory eval -n 3 ...`. Record it and name the commit it ran on.
-   - **If we skip it:** The README's "31 of 31" claim and the "Done when" line rest on code that is no longer the code in the repo.
+**Nice to have**
 
-### Nice to have
+2. **No test for `median`** (`cmd/factory/eval.go:L275-285`)
+   - **What this is:** `median` and `printSummary` produce the "median $" figure that the plan's done criterion uses.
+   - **Problem:** The even-count branch averages two values, and `median` also sorts the caller's slice in place. A slip in either would silently change the number you compare to $0.50. Nothing tests them.
+   - **Fix:** Add a table test of three cases: empty gives 0, `{3,1,2}` gives 2, and `{4,1,3,2}` gives 2.5.
+   - **If we skip it:** A wrong median is unlikely, but nothing would catch one.
 
-3. **A test sleeps 5 seconds for nothing** (`cmd/factory/eval.go:L141`, `cmd/factory/eval_test.go` `TestEvalStopsAtUsageLimit`)
-   - **What this is:** `evalOnce` waits 5 seconds before it reads the log for the first time.
-   - **Problem:** The test's fake server has already finished the run, so each test pays the full 5 seconds.
-   - **Fix:** Make the poll interval a package variable (`var pollEvery = 5 * time.Second`). The test sets it to 10 ms.
-   - **If we skip it:** The suite is 5 seconds slower. Nothing else breaks.
+Prose: I found nothing. The README, plan text, comments and commit messages are plain and active. The numbers in the README status match `evals/results/2026-11-06.jsonl`: 11 wordfreq runs (one trial plus 10), 10 csvq and 10 todo. The medians are about $0.10 to $0.17.
 
-Verdict: fix 1 and 2 first.
+Modern Go: I found no missed guideline. The code uses `encoding/json/v2`, the standard `uuid`, `errors.AsType`, `wg.Go`, `cmp.Or`, `slices.Sorted(maps.Keys(...))` and `strings.Lines`.
 
-Not checked: I did not run any tests or bwrap. The sandbox, git and `go fix` behavior come from reading the code and the tests. I did not read `docs/reviews/phase-1.md`.
+Verdict: fix 1 first. It is cheap, and it must be in place before the final batch runs. Item 2 is optional.
+
+Not checked: I could not run anything. The tests that need `bwrap` and a real Claude run were read, not run, and I did not check the Claude cost reported when a session is resumed (whether `total_cost_usd` is for that call or the whole session).

@@ -51,6 +51,9 @@ func TestLostRunsCountAsFailures(t *testing.T) {
 		if r.Pass || r.Status != "error" || !strings.Contains(r.Reason, "refused") || r.Eval != "wordfreq" {
 			t.Errorf("got %+v, want a failed wordfreq run with status error", r)
 		}
+		if r.Commit == "" {
+			t.Error("the result does not record the factory's commit")
+		}
 	}
 }
 
@@ -107,7 +110,7 @@ func TestEvalStopsAtUsageLimit(t *testing.T) {
 	}
 }
 
-// inTempRepo moves to a new folder that holds what runEvals needs from
+// inTempRepo moves to a new git repo that holds what runEvals needs from
 // the repo root.
 func inTempRepo(t *testing.T, repo string) {
 	t.Helper()
@@ -117,6 +120,21 @@ func inTempRepo(t *testing.T, repo string) {
 	}
 	if err := os.CopyFS(filepath.Join("evals", "evalkit"), os.DirFS(filepath.Join(repo, "evals", "evalkit"))); err != nil {
 		t.Fatal(err)
+	}
+	git := "git init -q && git add -A && git -c user.name=t -c user.email=t@localhost commit -q -m start"
+	if out, err := exec.Command("sh", "-c", git).CombinedOutput(); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+}
+
+func TestMedian(t *testing.T) {
+	for _, tt := range []struct {
+		xs   []float64
+		want float64
+	}{{nil, 0}, {[]float64{3, 1, 2}, 2}, {[]float64{4, 1, 3, 2}, 2.5}} {
+		if got := median(tt.xs); got != tt.want {
+			t.Errorf("median(%v) = %v, want %v", tt.xs, got, tt.want)
+		}
 	}
 }
 
