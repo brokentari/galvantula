@@ -288,7 +288,7 @@ ul.rules li b { color: var(--ink); font-weight: 600; }
     </div>
     <div class="card">
       <h3>Two human gates</h3>
-      <p>You approve the contract (interfaces and tests). Then you approve the task DAG (the task graph, which has no cycles) and its cost estimate.</p>
+      <p>You approve the contract (interfaces and tests). Then you approve the task graph (a graph of tasks with no cycles) and its cost estimate.</p>
     </div>
     <div class="card">
       <h3>Workers run sandboxed</h3>
@@ -340,7 +340,7 @@ ul.rules li b { color: var(--ink); font-weight: 600; }
         <!-- row 1 -->
         <rect class="box" x="410" y="60" width="130" height="56" rx="6"/>
         <text class="t" x="475" y="84">planner</text>
-        <text class="sub" x="475" y="102">JSON schema → DAG</text>
+        <text class="sub" x="475" y="102">JSON schema → graph</text>
 
         <rect class="box" x="575" y="60" width="130" height="56" rx="6"/>
         <text class="t" x="640" y="84">graph</text>
@@ -390,7 +390,7 @@ ul.rules li b { color: var(--ink); font-weight: 600; }
         <text class="lbl lbl-mid" x="394" y="80">spec</text>
 
         <line class="edge" x1="540" y1="88" x2="573" y2="88" marker-end="url(#a1)"/>
-        <text class="lbl lbl-mid" x="557" y="80">DAG</text>
+        <text class="lbl lbl-mid" x="557" y="80">nodes</text>
 
         <line class="edge" x1="380" y1="188" x2="408" y2="188" marker-start="url(#a1)" marker-end="url(#a1)"/>
         <text class="lbl lbl-mid" x="394" y="180">runs</text>
@@ -424,7 +424,7 @@ ul.rules li b { color: var(--ink); font-weight: 600; }
   <h2>The factory graph</h2>
   <figure>
     <div class="scroll">
-      <svg viewBox="0 0 1280 340" role="img" aria-label="Factory graph: a standards tool node writes AGENTS.md before the architect starts. Spec, architect, a contract approval gate, plan, and a DAG approval gate are fixed nodes. The planner emits a task DAG of packages; each task is implemented, checked and merged, and dependents start after their dependencies merge. Then verify, an advisory review, and done. A failed check retries that node; a failed verify or review findings open a bounded fix node; if that still fails, the planner rewrites the subgraph and the DAG goes back for approval.">
+      <svg viewBox="0 0 1280 340" role="img" aria-label="Factory graph: a standards tool node writes AGENTS.md before the architect starts. Spec, architect, a contract approval gate, plan, and a task-graph approval gate are fixed nodes. The planner emits a task graph of packages; each task is implemented, checked and merged, and dependents start after their dependencies merge. Then verify, an advisory review, and done. A failed check retries that node; a failed verify or review findings open a bounded fix node; if that still fails, the planner rewrites the subgraph and the task graph goes back for approval.">
         <defs>
           <marker id="a2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
             <path d="M0,0 L10,5 L0,10 z" class="mk"/>
@@ -436,7 +436,7 @@ ul.rules li b { color: var(--ink); font-weight: 600; }
 
         <!-- generated region -->
         <rect class="group" x="620" y="34" width="300" height="206" rx="10"/>
-        <text class="frame-lbl" x="636" y="54">generated task DAG</text>
+        <text class="frame-lbl" x="636" y="54">generated task graph</text>
 
         <!-- fixed head -->
         <rect class="box" x="20" y="121" width="80" height="48" rx="6"/>
@@ -459,11 +459,11 @@ ul.rules li b { color: var(--ink); font-weight: 600; }
 
         <rect class="box" x="389" y="121" width="96" height="48" rx="6"/>
         <text class="t" x="437" y="141">plan</text>
-        <text class="sub" x="437" y="158">emit DAG</text>
+        <text class="sub" x="437" y="158">emit graph</text>
 
         <rect class="box-gate" x="510" y="121" width="84" height="48" rx="24"/>
         <text class="t gate-t" x="552" y="141">approve</text>
-        <text class="sub" x="552" y="158">DAG + cost</text>
+        <text class="sub" x="552" y="158">graph + cost</text>
 
         <!-- generated nodes -->
         <rect class="box-gen" x="640" y="66" width="130" height="48" rx="6"/>
@@ -520,7 +520,7 @@ ul.rules li b { color: var(--ink); font-weight: 600; }
         <text class="retry-lbl" x="1112" y="212">must · should</text>
 
         <path class="edge-retry" d="M1060 288 C 1060 330, 437 330, 437 173" marker-end="url(#a2r)"/>
-        <text class="retry-lbl" x="740" y="326" text-anchor="middle">fix still failing → planner rewrites the subgraph (≤ M), back to DAG approval</text>
+        <text class="retry-lbl" x="740" y="326" text-anchor="middle">fix still failing → planner rewrites the subgraph (≤ M), back to task-graph approval</text>
       </svg>
     </div>
     <figcaption>You write the outer graph by hand, as a file. The standards node runs first and writes the same rules into every product, so the architect, the implementers, the fix node and the review all work from one file. The planner writes only the shaded nodes, as JSON that the runtime validates before anything runs. Each task node is implemented, checked and merged on its own, so a failure points at one package. A dependent node starts from the integration branch after its dependencies merge, so it builds against real code. Dashed edges have caps. Replanning runs only after retries and the fix node fail, and it always goes back to you.</figcaption>
@@ -653,14 +653,14 @@ sources:
   <div class="two">
     <div class="card">
       <span class="dir">validator</span>
-      <h3>A DAG is accepted only if</h3>
+      <h3>A task graph is accepted only if</h3>
       <ul>
         <li>it has no cycles, and every dependency names a node that exists</li>
         <li>each package in the contract has exactly one owner node</li>
         <li>nodes that can run at the same time have separate write scopes</li>
         <li>it is within the size limits (at most K nodes, depth at most D)</li>
       </ul>
-      <p>The DAG gate shows the estimated cost: the number of nodes times the per-node budget, plus the expected retries.</p>
+      <p>The task-graph gate shows the estimated cost: the number of nodes times the per-node budget, plus the expected retries.</p>
     </div>
     <div class="card">
       <span class="dir">replan</span>
@@ -717,7 +717,7 @@ sources:
   --permission-prompts none \
   --strict-mcp-config</pre>
       <p><b>Retries:</b> the first retry resumes the session with <code>--resume "$NODE_SESSION"</code> and the failing output, which is cheap because the context is already there. The second retry starts a new session, so the node can try a different approach.</p>
-      <p>The planner uses <code>--json-schema</code>, so Claude Code checks the DAG's shape before the runtime's own validator runs. Each role's model and effort come from <code>guardrails.yaml</code>.</p>
+      <p>The planner uses <code>--json-schema</code>, so Claude Code checks the task graph's shape before the runtime's own validator runs. Each role's model and effort come from <code>guardrails.yaml</code>.</p>
       <p>Bare mode uses <code>ANTHROPIC_API_KEY</code>, so runs bill at API rates.</p>
     </div>
     <div class="card">
@@ -809,8 +809,8 @@ factory_logs(node_id)     → transcript</pre>
       <span class="num">3</span>
       <div class="phase-head">
         <span class="layer">generated graph</span>
-        <h3>Planner emits the task DAG</h3>
-        <p class="build">A schema-checked DAG, the DAG gate with a cost estimate, write scopes, parallel sandboxed worktrees, and merges into the integration branch after each node.</p>
+        <h3>Planner emits the task graph</h3>
+        <p class="build">A schema-checked task graph, the task-graph gate with a cost estimate, write scopes, parallel sandboxed worktrees, and merges into the integration branch after each node.</p>
       </div>
       <p class="done"><b>Done when</b>A multi-package Go CLI builds from one paragraph, with 2 or more nodes running at the same time and no merge conflicts.</p>
     </li>

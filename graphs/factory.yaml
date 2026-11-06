@@ -30,7 +30,7 @@ nodes:
     deps: [plan]
 
   - id: tasks
-    title: Generated task DAG
+    title: Generated task graph
     kind: slot
     filled_by: plan
     deps: [approve-dag]

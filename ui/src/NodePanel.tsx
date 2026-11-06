@@ -48,7 +48,7 @@ export function NodePanel({ run, id, live, onClose }: { run: RunView; id: string
         <dt>retries</dt>
         <dd>
           {view.taskFailures} of {node.retries ?? 0} used
-          {view.infraFailures > 0 && ` · ${view.infraFailures} infra`}
+          {view.infraFailures > 0 && ` · ${view.infraFailures} not the node's fault`}
         </dd>
         {node.deps?.length ? (
           <>

@@ -10,14 +10,14 @@ runtime · Go | UI · TypeScript + React | node worker · claude -p | sandbox ·
 
 - **Tests and standards are frozen.** The architect writes the interfaces and the acceptance tests. The standards node writes `AGENTS.md`. You approve both. No later node may change them.
 - **Tooling decides pass or fail.** Build, vet, gofmt and tests decide. The review agent can only open a fix node. It never passes or fails a run.
-- **Two human gates.** You approve the contract (interfaces and tests). Then you approve the task DAG (the task graph, which has no cycles) and its cost estimate.
+- **Two human gates.** You approve the contract (interfaces and tests). Then you approve the task graph (a graph of tasks with no cycles) and its cost estimate.
 - **Workers run sandboxed.** Each `claude` process runs in bubblewrap. It sees only its worktree and the Go caches.
 - **The graph is a file.** The outer graph lives in `graphs/factory.yaml`, so the eval set can compare one graph version with another.
 - **The event log is the truth.** The UI, crash recovery and replay all read the same append-only log. Phase 0's fake run is a recorded log.
 
 ## System architecture
 
-Components inside `factory/` (Go): server (HTTP · SSE · MCP · gates), planner (JSON schema → DAG), graph (validate · versions), store (SQLite event log), runtime (scheduler · worker cap · budgets · timeouts · retries · resume), workspace (worktree · merge), verify (tests · frozen files), executor (Executor interface). Outside: Claude Code over MCP, the TypeScript UI over SSE (events out, approvals in), and the `claude --bare -p` workers inside a bwrap sandbox.
+Components inside `factory/` (Go): server (HTTP · SSE · MCP · gates), planner (JSON schema → graph), graph (validate · versions), store (SQLite event log), runtime (scheduler · worker cap · budgets · timeouts · retries · resume), workspace (worktree · merge), verify (tests · frozen files), executor (Executor interface). Outside: Claude Code over MCP, the TypeScript UI over SSE (events out, approvals in), and the `claude --bare -p` workers inside a bwrap sandbox.
 
 The runtime is the core. It owns the graph, picks nodes whose dependencies are done, and hands each one to the executor. Every agent node runs as a separate Claude Code process, sandboxed, in its own git worktree. Its stream-json events go into the store, and the UI reads them from there. Verification runs real tooling, never another agent. The runtime, not the agent, commits and merges.
 
@@ -25,13 +25,13 @@ The runtime is the core. It owns the graph, picks nodes whose dependencies are d
 
 ```
 standards (AGENTS.md, no LLM) ─┐
-spec ──────────────────────────┴→ architect → [approve contract] → plan → [approve DAG + cost]
-     → generated task DAG (each task: agent · check · merge; dependents start after their deps merge)
+spec ──────────────────────────┴→ architect → [approve contract] → plan → [approve task graph + cost]
+     → generated task graph (each task: agent · check · merge; dependents start after their deps merge)
      → verify (full suite, -race) → review (ponytail, advisory) → done
 
 check fails                          → retry that node (≤ N)
 verify fails / review must + should  → one bounded fix node, then re-verify
-fix still failing                    → planner rewrites the subgraph (≤ M), back to DAG approval
+fix still failing                    → planner rewrites the subgraph (≤ M), back to task-graph approval
 ```
 
 You write the outer graph by hand, as a file. The standards node runs first and writes the same rules into every product, so the architect, the implementers, the fix node and the review all work from one file. The planner writes only the generated nodes, as JSON that the runtime validates before anything runs. Each task node is implemented, checked and merged on its own, so a failure points at one package. A dependent node starts from the integration branch after its dependencies merge, so it builds against real code. Retry edges have caps. Replanning runs only after retries and the fix node fail, and it always goes back to you.
@@ -121,14 +121,14 @@ The runtime reads this file at the start of each run and stores it with the run,
 
 ## Planner and replanning
 
-A DAG is accepted only if:
+A task graph is accepted only if:
 
 - it has no cycles, and every dependency names a node that exists
 - each package in the contract has exactly one owner node
 - nodes that can run at the same time have separate write scopes
 - it is within the size limits (at most K nodes, depth at most D)
 
-The DAG gate shows the estimated cost: the number of nodes times the per-node budget, plus the expected retries.
+The task-graph gate shows the estimated cost: the number of nodes times the per-node budget, plus the expected retries.
 
 A rewrite may only:
 
@@ -176,7 +176,7 @@ claude --bare -p "$(cat brief.md)" \
 
 **Retries:** the first retry resumes the session with `--resume "$NODE_SESSION"` and the failing output, which is cheap because the context is already there. The second retry starts a new session, so the node can try a different approach.
 
-The planner uses `--json-schema`, so Claude Code checks the DAG's shape before the runtime's own validator runs. Each role's model and effort come from `guardrails.yaml`.
+The planner uses `--json-schema`, so Claude Code checks the task graph's shape before the runtime's own validator runs. Each role's model and effort come from `guardrails.yaml`.
 
 Bare mode uses `ANTHROPIC_API_KEY`, so runs bill at API rates.
 
@@ -239,7 +239,7 @@ Each phase ends with a standards review. `phasereview` asks the reviewer model, 
    **Done when** at least 8 of 10 runs pass on each of 3 eval tasks, under a median cost you set after the first runs. Also, a planted edit to a frozen test fails the check, and so does a planted `for i := 0; i < n; i++`.
 2. **fixed graph — Hand-written factory pipeline.** standards → architect → contract gate → implement → check → verify → review → fix. One implement node. The red-before-green check runs at the contract gate. The review node uses ponytail-review with the Prose group.
    **Done when** 3 of 5 eval specs pass their hidden tests end to end.
-3. **generated graph — Planner emits the task DAG.** A schema-checked DAG, the DAG gate with a cost estimate, write scopes, parallel sandboxed worktrees, and merges into the integration branch after each node.
+3. **generated graph — Planner emits the task graph.** A schema-checked task graph, the task-graph gate with a cost estimate, write scopes, parallel sandboxed worktrees, and merges into the integration branch after each node.
    **Done when** a multi-package Go CLI builds from one paragraph, with 2 or more nodes running at the same time and no merge conflicts.
 4. **replanning — Bounded graph rewrites.** After N failed retries and a failed fix, the planner rewrites the failing subgraph. Each rewrite is a new graph version, and the UI shows the difference between versions.
    **Done when** you plant planner mistakes (a wrong scope, a missing node), and the factory recovers from them within M replans.

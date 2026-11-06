@@ -1,4 +1,4 @@
-import type { FactoryEvent, Graph, NodeStatus, RunStatus } from "./gen/events";
+import type { FactoryEvent, FailureClass, Graph, NodeStatus, RunStatus } from "./gen/events";
 
 export interface NodeView {
   status: NodeStatus;
@@ -66,7 +66,7 @@ export function apply(run: RunView | undefined, e: FactoryEvent): RunView | unde
         lastError: e.data.error,
         taskFailures: n.taskFailures + (e.data.class === "task" ? 1 : 0),
         infraFailures: n.infraFailures + (e.data.class === "infra" ? 1 : 0),
-        logs: [...n.logs, `✗ ${e.data.class} failure: ${e.data.error}${e.data.will_retry ? " (will retry)" : ""}`],
+        logs: [...n.logs, `✗ ${failureKind(e.data.class)} failure: ${e.data.error}${e.data.will_retry ? " (will retry)" : ""}`],
       };
       break;
     case "gate_waiting":
@@ -107,6 +107,8 @@ export function layout(graph: Graph, colWidth = 205, rowHeight = 84): Map<string
   return pos;
 }
 
+const failureKind = (c: FailureClass) => (c === "infra" ? "infrastructure" : "task");
+
 export function describe(e: FactoryEvent): string {
   switch (e.type) {
     case "run_created":
@@ -120,7 +122,7 @@ export function describe(e: FactoryEvent): string {
     case "node_succeeded":
       return `${e.node} succeeded`;
     case "node_failed":
-      return `${e.node} failed (${e.data.class}${e.data.will_retry ? ", will retry" : ""}): ${e.data.error}`;
+      return `${e.node} failed (${failureKind(e.data.class)}${e.data.will_retry ? ", will retry" : ""}): ${e.data.error}`;
     case "gate_waiting":
       return `${e.node} waits for you`;
     case "gate_decided":

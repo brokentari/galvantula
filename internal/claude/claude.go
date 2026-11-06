@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Options configures one headless run.
@@ -75,7 +76,13 @@ func Run(ctx context.Context, o Options) (Result, error) {
 	cmd.Dir = o.Dir
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	cmd.WaitDelay = 10 * time.Second // tools it started must not keep Run waiting after a cancel
 	runErr := cmd.Run()
+	if ctx.Err() != nil {
+		// A cancel kills the process, and Wait reports "signal: killed".
+		// Report the cancel instead, so callers do not treat it as a crash.
+		return Result{}, fmt.Errorf("claude -p: %w", context.Cause(ctx))
+	}
 
 	var r Result
 	if err := json.Unmarshal(stdout.Bytes(), &r); err != nil {
