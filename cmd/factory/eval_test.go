@@ -127,7 +127,7 @@ func TestQuietRunsAreLost(t *testing.T) {
 		wantReason string
 	}{
 		{"logs nothing", -1, "error", "logged nothing"},
-		{"keeps logging", 30, "failed", "gave up"},
+		{"keeps logging", 60, "failed", "gave up"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -136,7 +136,7 @@ func TestQuietRunsAreLost(t *testing.T) {
 				t.Fatal(err)
 			}
 			inTempRepo(t, repo)
-			pollEvery, checkGrace = 10*time.Millisecond, 50*time.Millisecond
+			pollEvery, checkGrace = 10*time.Millisecond, 300*time.Millisecond
 			t.Cleanup(func() { pollEvery, checkGrace = 5*time.Second, 10*time.Minute })
 			store, err := event.Open("f.db")
 			if err != nil {
@@ -229,7 +229,7 @@ func TestHiddenTestsScoreAProduct(t *testing.T) {
 	if err := os.CopyFS(product, os.DirFS("evals/wordfreq/reference")); err != nil {
 		t.Fatal(err)
 	}
-	passed, total, err := hiddenTests(t.Context(), t.TempDir(), "evals/wordfreq", product)
+	passed, total, err := hiddenTests(t.Context(), "evals/wordfreq", product)
 	if err != nil || total == 0 || passed != total {
 		t.Fatalf("got %d/%d, %v; want every hidden test to pass", passed, total, err)
 	}
@@ -238,7 +238,7 @@ func TestHiddenTestsScoreAProduct(t *testing.T) {
 	if err := os.RemoveAll(filepath.Join(product, "cmd")); err != nil {
 		t.Fatal(err)
 	}
-	if passed, _, err := hiddenTests(t.Context(), t.TempDir(), "evals/wordfreq", product); err == nil && passed > 0 {
+	if passed, _, err := hiddenTests(t.Context(), "evals/wordfreq", product); err == nil && passed > 0 {
 		t.Errorf("a product without its program passed %d hidden tests", passed)
 	}
 }

@@ -209,7 +209,7 @@ func evalOnce(store *event.Store, addr, root, dir, g string) (evalResult, error)
 	if st.Status != event.RunSucceeded {
 		return r, nil
 	}
-	r.HiddenPassed, r.HiddenTotal, err = hiddenTests(context.Background(), root, dir, filepath.Join(root, id, "repo"))
+	r.HiddenPassed, r.HiddenTotal, err = hiddenTests(context.Background(), dir, filepath.Join(root, id, "repo"))
 	if err != nil {
 		r.Reason = err.Error() // a product that does not build fails, and still counts
 	}
@@ -220,7 +220,7 @@ func evalOnce(store *event.Store, addr, root, dir, g string) (evalResult, error)
 // hiddenTests runs an eval's hidden tests against a product, in the sandbox,
 // because they build and run the agent's code. The sandbox sees only the parts
 // of the repo the tests need: not the reference answers, tokens or other runs.
-func hiddenTests(ctx context.Context, root, dir, product string) (passed, total int, err error) {
+func hiddenTests(ctx context.Context, dir, product string) (passed, total int, err error) {
 	repo, err := os.Getwd()
 	if err != nil {
 		return 0, 0, err
@@ -234,12 +234,13 @@ func hiddenTests(ctx context.Context, root, dir, product string) (passed, total 
 		return 0, 0, err
 	}
 	defer os.RemoveAll(home)
-	// Not the agents' cache: an agent must not be able to plant build
-	// results that the hidden tests then use.
-	cache := filepath.Join(root, ".cache", "hidden-build")
-	if err := os.MkdirAll(cache, 0o755); err != nil {
+	// A new cache for each score: the product runs during scoring and could
+	// otherwise plant build results that later scores use.
+	cache, err := os.MkdirTemp("", "hidden-build")
+	if err != nil {
 		return 0, 0, err
 	}
+	defer os.RemoveAll(cache)
 	hidden, err := filepath.Abs(filepath.Join(dir, "hidden"))
 	if err != nil {
 		return 0, 0, err

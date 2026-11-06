@@ -6,12 +6,13 @@ node. A React UI shows each run live. The full plan is in
 [Software Factory Plan.html](Software%20Factory%20Plan.html).
 
 **Status: phase 1 (one sandboxed agent) is built.** The first eval batch
-passed the hidden tests in all 31 runs: one trial run of wordfreq, then 10
-runs of each eval (`evals/results/2026-11-06-5253e7d.jsonl`). The median
-cost was $0.10 to $0.17 per run, under the phase's limit of $0.50. The 30
-runs ran on commit 5253e7d, before the fixes from the phase-1 review, so the
-batch must run again on the final code before phase 1 is done. Each new
-result line records the commit it ran on. Phase 0 passed its
+passed the hidden tests in all 31 runs: one trial run of wordfreq on commit
+0163ff3, then 10 runs of each eval on commit 5253e7d
+(`evals/results/2026-11-06-5253e7d.jsonl`). Those lines are older than the
+`commit` field, so they do not record it; new lines do. The median cost was
+$0.10 to $0.17 per run, under the phase's limit of $0.50. The batch ran before
+the fixes from the phase-1 review, so it must run again on the final code
+before phase 1 is done. Phase 0 passed its
 standards review (`docs/reviews/phase-0.md`).
 
 ## Run the demo
