@@ -230,7 +230,9 @@ func hiddenTests(ctx context.Context, root, dir, product string) (passed, total 
 		return 0, 0, err
 	}
 	defer os.RemoveAll(home)
-	cache := filepath.Join(root, ".cache", "go-build")
+	// Not the agents' cache: an agent must not be able to plant build
+	// results that the hidden tests then use.
+	cache := filepath.Join(root, ".cache", "hidden-build")
 	if err := os.MkdirAll(cache, 0o755); err != nil {
 		return 0, 0, err
 	}

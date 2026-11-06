@@ -57,7 +57,7 @@ go run ./cmd/factory start -spec evals/wordfreq/spec.md graphs/phase1.yaml
 Each run's product is a git repo in `runs/<run>/repo`. The agent works in
 `runs/<run>/nodes/<node>`; the runtime commits and merges its work after the
 check passes. `guardrails.yaml` sets the spending and time limits for each
-attempt and for the whole run.
+attempt and for the whole run. Restart the server after you change it.
 
 The server's API has no login. Anyone who can reach it can start agents
 with your credential, so run the server only on a machine that you alone use.
