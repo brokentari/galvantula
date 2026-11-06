@@ -7,7 +7,8 @@ package event
 
 import (
 	"cmp"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"fmt"
 	"time"
 
@@ -45,13 +46,13 @@ var Payloads = map[Type]any{
 
 // Event is one entry in the log. Seq and At are set by the store.
 type Event struct {
-	Seq     int64           `json:"seq"`
-	Run     string          `json:"run"`
-	At      time.Time       `json:"at"`
-	Type    Type            `json:"type"`
-	Node    string          `json:"node,omitempty"`
-	Attempt int             `json:"attempt,omitempty"`
-	Data    json.RawMessage `json:"data,omitempty"`
+	Seq     int64          `json:"seq"`
+	Run     string         `json:"run"`
+	At      time.Time      `json:"at"`
+	Type    Type           `json:"type"`
+	Node    string         `json:"node,omitempty"`
+	Attempt int            `json:"attempt,omitzero"`
+	Data    jsontext.Value `json:"data,omitzero"`
 }
 
 type RunCreatedData struct {
@@ -113,7 +114,7 @@ func New(run string, t Type, node string, attempt int, data any) Event {
 }
 
 // Decode reads an event's data into a payload of type T.
-func Decode[T any](e Event) (T, error) {
+func (e Event) Decode[T any]() (T, error) {
 	var v T
 	if err := json.Unmarshal(e.Data, &v); err != nil {
 		return v, fmt.Errorf("event %d (%s): %w", e.Seq, e.Type, err)
@@ -165,7 +166,7 @@ func Fold(events []Event) (*State, error) {
 func (s *State) Apply(e Event) error {
 	switch e.Type {
 	case RunCreated:
-		d, err := Decode[RunCreatedData](e)
+		d, err := e.Decode[RunCreatedData]()
 		if err != nil {
 			return err
 		}
@@ -176,7 +177,7 @@ func (s *State) Apply(e Event) error {
 		}
 		return nil
 	case GraphUpdated:
-		d, err := Decode[GraphUpdatedData](e)
+		d, err := e.Decode[GraphUpdatedData]()
 		if err != nil {
 			return err
 		}
@@ -186,9 +187,14 @@ func (s *State) Apply(e Event) error {
 			nodes[n.ID] = cmp.Or(s.Nodes[n.ID], &NodeState{Status: Pending})
 		}
 		s.Nodes = nodes
+		// A plan node succeeds in the same event that adds its nodes, so a
+		// crash cannot fall between the two.
+		if n, ok := s.Nodes[e.Node]; ok {
+			n.Status = Succeeded
+		}
 		return nil
 	case RunFinished:
-		d, err := Decode[RunFinishedData](e)
+		d, err := e.Decode[RunFinishedData]()
 		if err != nil {
 			return err
 		}
@@ -208,7 +214,7 @@ func (s *State) Apply(e Event) error {
 	case NodeSucceeded:
 		n.Status = Succeeded
 	case NodeFailed:
-		d, err := Decode[NodeFailedData](e)
+		d, err := e.Decode[NodeFailedData]()
 		if err != nil {
 			return err
 		}
@@ -225,7 +231,7 @@ func (s *State) Apply(e Event) error {
 	case GateWaiting:
 		n.Status = Waiting
 	case GateDecided:
-		d, err := Decode[GateDecidedData](e)
+		d, err := e.Decode[GateDecidedData]()
 		if err != nil {
 			return err
 		}

@@ -242,3 +242,36 @@ func TestRunFails(t *testing.T) {
 		})
 	}
 }
+
+// A crash right after a plan node's graph_updated event must not run the
+// plan again: that one event records both the new nodes and the success.
+func TestResumeAfterPlanEmitted(t *testing.T) {
+	store := openStore(t)
+	g := mustParse(t, "name: g\nnodes:\n  - {id: p, kind: plan}\n  - {id: s, kind: slot, filled_by: p, deps: [p]}\n  - {id: v, kind: tool, deps: [s]}")
+	filled, err := g.Fill("s", []graph.Node{{ID: "x", Kind: graph.Agent}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range []event.Event{
+		event.New("r", event.RunCreated, "", 0, event.RunCreatedData{Graph: g, Executor: "fake"}),
+		event.New("r", event.NodeStarted, "p", 1, nil),
+		event.New("r", event.GraphUpdated, "p", 1, event.GraphUpdatedData{Graph: filled, Reason: "p emitted 1 nodes"}),
+	} {
+		if _, err := store.Append(e); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	r := New(t.Context(), store, 3)
+	r.Executor = fast
+	if err := r.ResumeAll(); err != nil {
+		t.Fatal(err)
+	}
+	st, evs := waitUntil(t, store, "r", "the resumed run finishes", runDone)
+	if st.Status != event.RunSucceeded {
+		t.Fatalf("run %s: %s", st.Status, st.Reason)
+	}
+	if i := index(evs, event.NodeStarted, "p"); slices.ContainsFunc(evs[i+1:], func(e event.Event) bool { return e.Type == event.NodeStarted && e.Node == "p" }) {
+		t.Error("the plan node ran again after its graph_updated event")
+	}
+}

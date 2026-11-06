@@ -4,7 +4,7 @@ package server
 
 import (
 	"cmp"
-	"encoding/json"
+	"encoding/json/v2"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -16,8 +16,12 @@ import (
 	"github.com/brokentari/galvantula/internal/runner"
 )
 
-// heartbeat keeps idle SSE connections open through proxies.
-const heartbeat = 15 * time.Second
+const (
+	// heartbeat keeps idle SSE connections open through proxies.
+	heartbeat = 15 * time.Second
+	// maxBody caps request bodies. A graph and a fake script are a few KB.
+	maxBody = 1 << 20
+)
 
 type server struct {
 	store  *event.Store
@@ -61,7 +65,7 @@ func (s *server) listRuns(w http.ResponseWriter, _ *http.Request) {
 
 func (s *server) startRun(w http.ResponseWriter, r *http.Request) {
 	var req StartRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.UnmarshalRead(http.MaxBytesReader(w, r.Body, maxBody), &req); err != nil {
 		http.Error(w, "bad request body: "+err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -80,7 +84,7 @@ func (s *server) startRun(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) decide(w http.ResponseWriter, r *http.Request) {
 	var req DecideRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.UnmarshalRead(http.MaxBytesReader(w, r.Body, maxBody), &req); err != nil {
 		http.Error(w, "bad request body: "+err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -137,8 +141,7 @@ func (s *server) streamEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tick := time.NewTicker(heartbeat)
-	defer tick.Stop()
+	tick := time.Tick(heartbeat)
 	for {
 		select {
 		case e, ok := <-live:
@@ -151,7 +154,7 @@ func (s *server) streamEvents(w http.ResponseWriter, r *http.Request) {
 			if err := send(e); err != nil {
 				return
 			}
-		case <-tick.C:
+		case <-tick:
 			if _, err := fmt.Fprint(w, ": ping\n\n"); err != nil || rc.Flush() != nil {
 				return
 			}
@@ -164,7 +167,7 @@ func (s *server) streamEvents(w http.ResponseWriter, r *http.Request) {
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	if err := json.NewEncoder(w).Encode(v); err != nil {
+	if err := json.MarshalWrite(w, v); err != nil {
 		slog.Warn("write response", "err", err)
 	}
 }

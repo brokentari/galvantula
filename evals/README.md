@@ -19,7 +19,7 @@ A model writes them, not a person, and not a model that builds products.
 `go run ./cmd/evalgen evals/<name>` gives `spec.md` to the `eval_author`
 model in `guardrails.yaml`. That model writes the hidden tests, the reference
 and `assumptions.md`. `guardrails.yaml` refuses an `eval_author` that any
-builder role also uses, so the tests do not share the builders' blind spots.
+builder role also uses, so the tests do not repeat the builders' mistakes.
 
 evalgen does not trust the model's report. It keeps the result only if:
 

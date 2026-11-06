@@ -4,7 +4,7 @@ package main
 
 import (
 	"cmp"
-	"encoding/json"
+	"encoding/json/jsontext"
 	"flag"
 	"fmt"
 	"log"
@@ -106,7 +106,7 @@ func (g gen) ts(t reflect.Type) string {
 	switch t {
 	case reflect.TypeFor[time.Time]():
 		return "string"
-	case reflect.TypeFor[json.RawMessage]():
+	case reflect.TypeFor[jsontext.Value]():
 		return "unknown"
 	}
 	switch t.Kind() {

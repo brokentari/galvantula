@@ -41,7 +41,7 @@ type Node struct {
 	Title    string   `yaml:"title" json:"title,omitempty"`
 	Kind     Kind     `yaml:"kind" json:"kind"`
 	Deps     []string `yaml:"deps" json:"deps,omitempty"`
-	Retries  int      `yaml:"retries" json:"retries,omitempty"`
+	Retries  int      `yaml:"retries" json:"retries,omitzero"`
 	FilledBy string   `yaml:"filled_by" json:"filled_by,omitempty"`
 }
 

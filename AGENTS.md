@@ -17,7 +17,7 @@ cd ui && npm run build                       # type-checks the UI
 ```
 
 Then review the change with the ponytail-review skill
-(`.claude/skills/ponytail-review/SKILL.md`). Review the prose you wrote
+(`standards/vendor/ponytail/skills/ponytail-review/SKILL.md`). Review the prose you wrote
 (README, docs, comments, UI text, specs, commit messages) against the Orwell
 rules below. Fix every Must fix and Should fix finding.
 

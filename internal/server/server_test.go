@@ -3,7 +3,7 @@ package server
 import (
 	"bufio"
 	"bytes"
-	"encoding/json"
+	"encoding/json/v2"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -56,8 +56,10 @@ func TestStreamAndDecide(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var created struct{ ID string }
-	json.NewDecoder(resp.Body).Decode(&created)
+	var created struct {
+		ID string `json:"id"`
+	}
+	json.UnmarshalRead(resp.Body, &created)
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("start: %s", resp.Status)

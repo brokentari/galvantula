@@ -2,7 +2,8 @@ package event
 
 import (
 	"database/sql"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"fmt"
 	"sync"
 	"time"
@@ -21,6 +22,7 @@ CREATE TABLE IF NOT EXISTS events (
 	data    TEXT
 );
 CREATE INDEX IF NOT EXISTS events_by_run ON events (run, seq);
+CREATE INDEX IF NOT EXISTS events_by_type ON events (type, run);
 `
 
 // subBuffer is how many events a slow subscriber may fall behind before the
@@ -102,7 +104,7 @@ func (s *Store) Events(run string, after int64) ([]Event, error) {
 			return nil, fmt.Errorf("event %d: %w", e.Seq, err)
 		}
 		if data.Valid {
-			e.Data = json.RawMessage(data.String)
+			e.Data = jsontext.Value(data.String)
 		}
 		out = append(out, e)
 	}

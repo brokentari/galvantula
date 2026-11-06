@@ -1,6 +1,6 @@
 // Command factory runs the software factory.
 //
-//	factory serve    [-addr :7070] [-db factory.db] [-ui ui/dist] [-workers 3]
+//	factory serve    [-addr localhost:7070] [-db factory.db] [-ui ui/dist] [-workers 3]
 //	factory start    [-server http://localhost:7070] -fake script.yaml graph.yaml
 //	factory validate graph.yaml...
 //	factory standards [-guardrails guardrails.yaml] [-o AGENTS.md]
@@ -9,7 +9,7 @@ package main
 import (
 	"bytes"
 	"context"
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
 	"flag"
 	"fmt"
@@ -30,7 +30,7 @@ import (
 )
 
 const usage = `usage:
-  factory serve    [-addr :7070] [-db factory.db] [-ui ui/dist] [-workers 3]
+  factory serve    [-addr localhost:7070] [-db factory.db] [-ui ui/dist] [-workers 3]
   factory start    [-server http://localhost:7070] -fake script.yaml graph.yaml
   factory validate graph.yaml...
   factory standards [-guardrails guardrails.yaml] [-o AGENTS.md]`
@@ -62,7 +62,7 @@ func main() {
 
 func serve(args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
-	addr := fs.String("addr", ":7070", "listen address")
+	addr := fs.String("addr", "localhost:7070", "listen address; the API has no login, so keep it local")
 	dbPath := fs.String("db", "factory.db", "event log file")
 	uiDir := fs.String("ui", "ui/dist", "built UI to serve; empty to serve only the API")
 	workers := fs.Int("workers", 3, "nodes of one run that may execute at the same time")
@@ -87,12 +87,11 @@ func serve(args []string) error {
 	}
 
 	srv := &http.Server{Addr: *addr, Handler: server.New(store, run, *uiDir)}
-	go func() {
-		<-ctx.Done()
+	defer context.AfterFunc(ctx, func() {
 		shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		srv.Shutdown(shutdown)
-	}()
+	})()
 	slog.Info("factory listening", "addr", *addr, "db", *dbPath)
 	if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
 		return err
@@ -127,7 +126,9 @@ func start(args []string) error {
 	if resp.StatusCode != http.StatusCreated {
 		return fmt.Errorf("server refused the run (%s): %s", resp.Status, bytes.TrimSpace(out))
 	}
-	var created struct{ ID string }
+	var created struct {
+		ID string `json:"id"`
+	}
 	if err := json.Unmarshal(out, &created); err != nil {
 		return err
 	}

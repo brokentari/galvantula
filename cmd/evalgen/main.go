@@ -1,6 +1,6 @@
 // Command evalgen writes each eval's hidden tests and reference answer from
 // its spec.md, using the eval_author model in guardrails.yaml. That model
-// never builds products, so the tests do not share the builders' blind spots.
+// never builds products, so the tests do not repeat the builders' mistakes.
 // evalgen then checks the work itself: the tests must pass on the reference,
 // fail on a program that does nothing, and pass vet, gofmt and go fix.
 //
@@ -13,7 +13,8 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"flag"
 	"fmt"
@@ -173,7 +174,7 @@ func generate(ctx context.Context, g guardrails.Guardrails, dir string, retries 
 		return err
 	}
 	p.Generated = time.Now().UTC()
-	data, _ := json.MarshalIndent(p, "", "  ")
+	data, _ := json.Marshal(p, jsontext.WithIndent("  "))
 	if err := os.WriteFile(filepath.Join(dir, "provenance.json"), append(data, '\n'), 0o644); err != nil {
 		return err
 	}
@@ -187,13 +188,16 @@ func generate(ctx context.Context, g guardrails.Guardrails, dir string, retries 
 
 // setUp makes a small module that mirrors evals/: evalkit, plus the spec.
 func setUp(work string, kit, spec []byte, goVersion string) error {
-	files := map[string][]byte{
+	return writeFiles(work, map[string][]byte{
 		"go.mod":             fmt.Appendf(nil, "module %s\n\ngo %s\n", workModule, goVersion),
 		"spec.md":            spec,
 		"evalkit/evalkit.go": kit,
-	}
+	})
+}
+
+func writeFiles(root string, files map[string][]byte) error {
 	for path, data := range files {
-		full := filepath.Join(work, path)
+		full := filepath.Join(root, path)
 		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
 			return err
 		}
@@ -238,10 +242,16 @@ func check(work, name string, kit []byte, p *provenance) error {
 		return err
 	}
 	defer os.RemoveAll(stub)
-	os.MkdirAll(filepath.Join(stub, "cmd", name), 0o755)
-	os.WriteFile(filepath.Join(stub, "go.mod"), []byte("module stub\n"), 0o644)
-	os.WriteFile(filepath.Join(stub, "cmd", name, "main.go"), []byte("package main\n\nfunc main() {}\n"), 0o644)
-	stubPassed, stubFailed, _ := testCounts(work, []string{"EVAL_PRODUCT=" + stub}, pkg)
+	if err := writeFiles(stub, map[string][]byte{
+		"go.mod":                   []byte("module stub\n"),
+		"cmd/" + name + "/main.go": []byte("package main\n\nfunc main() {}\n"),
+	}); err != nil {
+		return err
+	}
+	stubPassed, stubFailed, stubOut := testCounts(work, []string{"EVAL_PRODUCT=" + stub}, pkg)
+	if stubPassed+stubFailed == 0 {
+		return fmt.Errorf("no test ran against the do-nothing program:\n%s", stubOut)
+	}
 	if float64(stubFailed) < minStubFailures*float64(stubPassed+stubFailed) {
 		return fmt.Errorf("only %d of %d tests fail on a program that does nothing; at least %.0f%% must fail, so most tests check real behavior",
 			stubFailed, stubPassed+stubFailed, minStubFailures*100)
@@ -253,6 +263,12 @@ func check(work, name string, kit []byte, p *provenance) error {
 // testCounts runs go test -json and counts top-level tests that pass and fail.
 func testCounts(dir string, env []string, pkg string) (passed, failed int, output string) {
 	out, _ := goCmd(dir, env, "test", "-count=1", "-json", pkg)
+	return countTests(out)
+}
+
+// countTests reads go test -json output. Build errors are not JSON, so it
+// keeps them as text.
+func countTests(out string) (passed, failed int, output string) {
 	var text strings.Builder
 	sc := bufio.NewScanner(strings.NewReader(out))
 	sc.Buffer(nil, 1<<20)
@@ -277,13 +293,29 @@ func testCounts(dir string, env []string, pkg string) (passed, failed int, outpu
 }
 
 // install copies the generated files into the repo and fixes import paths.
+// It copies into a staging folder first and then renames each part into
+// place, so a failed copy leaves the old tests as they were.
 func install(work, dir, name string) error {
-	for _, sub := range []string{"hidden", "reference"} {
-		if err := os.RemoveAll(filepath.Join(dir, sub)); err != nil {
+	stage, err := os.MkdirTemp(dir, ".evalgen-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(stage)
+	if err := copyTree(filepath.Join(work, name), stage); err != nil {
+		return err
+	}
+	for _, part := range []string{"hidden", "reference", "assumptions.md"} {
+		if err := os.RemoveAll(filepath.Join(dir, part)); err != nil {
+			return err
+		}
+		if err := os.Rename(filepath.Join(stage, part), filepath.Join(dir, part)); err != nil {
 			return err
 		}
 	}
-	src := filepath.Join(work, name)
+	return nil
+}
+
+func copyTree(src, dst string) error {
 	return filepath.WalkDir(src, func(path string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return err
@@ -296,11 +328,7 @@ func install(work, dir, name string) error {
 		if strings.HasSuffix(path, ".go") {
 			data = bytes.ReplaceAll(data, []byte(`"`+workModule+`/`), []byte(`"`+repoModule+`/`))
 		}
-		dst := filepath.Join(dir, rel)
-		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-			return err
-		}
-		return os.WriteFile(dst, data, 0o644)
+		return writeFiles(dst, map[string][]byte{rel: data})
 	})
 }
 

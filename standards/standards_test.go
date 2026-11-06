@@ -3,7 +3,7 @@ package standards
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
+	"encoding/json/v2"
 	"os"
 	"path"
 	"strings"
@@ -17,7 +17,11 @@ func TestLockMatchesVendoredFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var lock []struct{ Name, Path, Sha256 string }
+	var lock []struct {
+		Name   string `json:"name"`
+		Path   string `json:"path"`
+		Sha256 string `json:"sha256"`
+	}
 	if err := json.Unmarshal(raw, &lock); err != nil {
 		t.Fatal(err)
 	}

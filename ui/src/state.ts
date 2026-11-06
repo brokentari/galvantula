@@ -38,6 +38,8 @@ export function apply(run: RunView | undefined, e: FactoryEvent): RunView | unde
   if (!run) return run;
   if (e.type === "graph_updated") {
     const nodes = Object.fromEntries(e.data.graph.nodes.map((n) => [n.id, run.nodes[n.id] ?? blank()]));
+    // The plan node that emitted the nodes succeeds in this same event.
+    if (e.node && nodes[e.node]) nodes[e.node] = { ...nodes[e.node], status: "succeeded" };
     return { ...run, graph: e.data.graph, graphVersion: run.graphVersion + 1, nodes };
   }
   if (e.type === "run_finished") {

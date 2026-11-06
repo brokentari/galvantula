@@ -109,7 +109,8 @@ func (r *Runner) ResumeAll() error {
 	return nil
 }
 
-// Wait blocks until every run this runner drives has stopped.
+// Wait blocks until every run this runner drives, and every node it
+// started, has stopped.
 func (r *Runner) Wait() { r.wg.Wait() }
 
 // Decide records a human decision on a gate that is waiting.
@@ -210,7 +211,7 @@ func (r *Runner) drive(id string, a *active) error {
 					return err
 				}
 				running++
-				go func() {
+				r.wg.Go(func() {
 					log := func(line string) {
 						// Log lines do not change state, so workers append them directly.
 						e := event.New(id, event.NodeLog, n.ID, attempt, event.NodeLogData{Line: line})
@@ -220,7 +221,7 @@ func (r *Runner) drive(id string, a *active) error {
 					}
 					res, err := exec.Run(r.ctx, executor.Task{Run: id, Node: n, Attempt: attempt}, log)
 					results <- outcome{node: n, attempt: attempt, res: res, err: err}
-				}()
+				})
 			}
 		}
 
@@ -253,14 +254,12 @@ func (r *Runner) drive(id string, a *active) error {
 func (r *Runner) complete(st *event.State, emit func(event.Event) error, o outcome) error {
 	if o.err == nil && o.node.Kind == graph.Plan {
 		g, err := fillSlot(st.Graph, o.node.ID, o.res.Nodes)
-		if err != nil {
-			o.err = fmt.Errorf("plan output rejected: %w", err)
-		} else {
+		if err == nil {
+			// This one event also marks the plan node succeeded.
 			d := event.GraphUpdatedData{Graph: g, Reason: fmt.Sprintf("%s emitted %d nodes", o.node.ID, len(o.res.Nodes))}
-			if err := emit(event.New(st.Run, event.GraphUpdated, o.node.ID, o.attempt, d)); err != nil {
-				return err
-			}
+			return emit(event.New(st.Run, event.GraphUpdated, o.node.ID, o.attempt, d))
 		}
+		o.err = fmt.Errorf("plan output rejected: %w", err)
 	}
 	if o.err == nil {
 		return emit(event.New(st.Run, event.NodeSucceeded, o.node.ID, o.attempt, nil))
