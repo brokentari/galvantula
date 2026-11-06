@@ -2,14 +2,19 @@ package main
 
 import (
 	"encoding/json/v2"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/brokentari/galvantula/internal/event"
+	"github.com/brokentari/galvantula/internal/graph"
 )
 
 // A run the eval loses still counts, as a failed run, so the pass rate
@@ -24,7 +29,7 @@ func TestLostRunsCountAsFailures(t *testing.T) {
 		t.Fatal(err)
 	}
 	repo = filepath.Join(repo, "..", "..")
-	t.Chdir(t.TempDir()) // runEvals writes evals/results here
+	inTempRepo(t, repo) // runEvals writes evals/results here
 	err = runEvals([]string{"-server", refuse.URL, "-db", "f.db", "-runs", "runs", "-n", "2",
 		"-graph", filepath.Join(repo, "graphs", "phase1.yaml"), filepath.Join(repo, "evals", "wordfreq")})
 	if err != nil {
@@ -46,6 +51,60 @@ func TestLostRunsCountAsFailures(t *testing.T) {
 		if r.Pass || r.Status != "error" || !strings.Contains(r.Reason, "refused") || r.Eval != "wordfreq" {
 			t.Errorf("got %+v, want a failed wordfreq run with status error", r)
 		}
+	}
+}
+
+// After one run reaches the account's usage limit, the eval must start no
+// more runs: each one would buy more usage.
+func TestEvalStopsAtUsageLimit(t *testing.T) {
+	repo, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	inTempRepo(t, repo)
+	store, err := event.Open("f.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	var started atomic.Int32
+	limits := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		id := fmt.Sprintf("r-%d", started.Add(1))
+		g := graph.Graph{Name: "g", Nodes: []graph.Node{{ID: "build", Kind: graph.Agent}}}
+		for _, e := range []event.Event{
+			event.New(id, event.RunCreated, "", 0, event.RunCreatedData{Graph: g, Executor: "claude", Spec: "x"}),
+			event.New(id, event.NodeStarted, "build", 1, nil),
+			event.New(id, event.NodeFailed, "build", 1, event.NodeFailedData{Error: "usage limit", Class: event.Limit}),
+			event.New(id, event.RunFinished, "", 0, event.RunFinishedData{Status: event.RunFailed, Reason: "usage limit"}),
+		} {
+			if _, err := store.Append(e); err != nil {
+				t.Error(err)
+			}
+		}
+		w.WriteHeader(http.StatusCreated)
+		fmt.Fprintf(w, `{"id":%q}`, id)
+	}))
+	defer limits.Close()
+	err = runEvals([]string{"-server", limits.URL, "-db", "f.db", "-runs", "runs", "-n", "3",
+		"-graph", filepath.Join(repo, "graphs", "phase1.yaml"), filepath.Join(repo, "evals", "wordfreq")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := started.Load(); n != 1 {
+		t.Errorf("the eval started %d runs, want 1", n)
+	}
+}
+
+// inTempRepo moves to a new folder that holds what runEvals needs from
+// the repo root.
+func inTempRepo(t *testing.T, repo string) {
+	t.Helper()
+	t.Chdir(t.TempDir())
+	if err := os.WriteFile("go.mod", nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.CopyFS(filepath.Join("evals", "evalkit"), os.DirFS(filepath.Join(repo, "evals", "evalkit"))); err != nil {
+		t.Fatal(err)
 	}
 }
 

@@ -206,8 +206,8 @@ func toolArg(in map[string]any) string {
 
 func short(s string) string {
 	s = strings.Join(strings.Fields(s), " ")
-	if len(s) > 200 {
-		return s[:200] + "…"
+	if r := []rune(s); len(r) > 200 {
+		return string(r[:200]) + "…" // cut by rune, so a character is never split
 	}
 	return s
 }
