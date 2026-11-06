@@ -103,5 +103,5 @@ func (r Repo) git(dir string, args ...string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("git %s: %w\n%s", strings.Join(args, " "), err, out)
 	}
-	return strings.TrimSpace(string(out)), nil
+	return string(out), nil // untrimmed: a -z name may start with a space
 }

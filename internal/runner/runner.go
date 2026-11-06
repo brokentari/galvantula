@@ -221,6 +221,11 @@ func (r *Runner) drive(id string, a *active) error {
 	}
 
 	exec, err := r.Executor(st)
+	if errors.Is(err, errNoAuth) {
+		// Leave the run as it is. It resumes at the next start that has a credential.
+		slog.Warn("cannot resume run", "run", id, "err", err)
+		return nil
+	}
 	if err != nil {
 		return emit(event.New(id, event.RunFinished, "", 0,
 			event.RunFinishedData{Status: event.RunFailed, Reason: err.Error()}))
@@ -264,7 +269,7 @@ func (r *Runner) drive(id string, a *active) error {
 				task := executor.Task{Run: id, Node: n, Attempt: ns.Attempt + 1}
 				if ns.Attempt > 0 {
 					task.Feedback = ns.LastError
-					task.Resume = task.Attempt == 2 && ns.LastClass == event.Task
+					task.Resume = ns.TaskFailures == 1 && ns.LastClass == event.Task // an infra failure before it does not count
 				}
 				// The first infra retry starts at once: a restart is not a rate limit.
 				var wait time.Duration

@@ -1,50 +1,56 @@
 # Review: phase-1
 
-Reviewer: claude-sonnet-5-5 at high effort, in a new session. Range: 6189377..09fb11e. Date: 2026-11-06. Cost: $0.54.
+Reviewer: claude-sonnet-5-5 at high effort, in a new session. Range: 6189377..33d7ef6. Date: 2026-11-06. Cost: $0.71.
 
-What this change does: It adds phase 1 of the factory. A Claude Code agent runs inside a bubblewrap sandbox in its own git worktree. The runtime checks the agent's work, commits it, and merges it into `main`. It also adds spending and time limits, a usage-limit stop, and `factory eval`, which runs evals N times and scores the products with hidden tests. I assumed one developer running this locally, with one eval run at a time by default. I did not run any code or tests.
+I checked the server's request guards, the graph ID rules, the generated TypeScript types and the SQLite settings. All of them hold. Findings below.
 
-I found no Must-fix problems. I checked these and found them sound:
-- The git isolation in `workspace.git`.
-- The runner stop and finish logic (`stopReason`, `finished`).
-- The read-only mount for the check.
-- The infra backoff.
-- The generated TypeScript types, which are current (`ui/src/gen/events.ts` already has `limit` and `cost_usd`).
+**What this change does:** Phase 1 adds one real agent node. Claude Code runs inside a bubblewrap sandbox, in its own git worktree. The runtime checks its work, then commits and merges it. The change also adds spend and time limits, a usage-limit stop and `factory eval`. `factory eval` runs the specs N times and scores each product with hidden tests. The last four commits fix earlier review findings. I assumed one person running a local server, with eval runs one at a time.
+
+### Must fix
+None.
 
 ### Should fix
 
-1. **`claude.Run` can hang after a cancel** (`internal/claude/claude.go`, `Run` and `read`)
-   - **What this is:** `Run` now reads the output stream line by line to log each step. It calls `cmd.Wait()` only after the reading ends.
-   - **Problem:** The old code used a buffer, so `cmd.WaitDelay = 10s` freed `Run` after a cancel. Now `read` waits for the pipe to close, and `WaitDelay` is not in effect until `Wait` runs. If a child process of `claude` outlives the kill and holds stdout open, `Run` blocks forever. The sandbox path is safe, because killing bwrap kills its whole process namespace. The unsandboxed callers (`cmd/evalgen`, `cmd/phasereview`) are not.
-   - **Fix:** Make stdout an `io.Pipe` and run `cmd.Wait()` in a goroutine. The goroutine closes the pipe writer when `Wait` returns, and `Wait` then honors `WaitDelay`. This is about 5 lines.
-   - **If we skip it:** A cancelled `evalgen` or `phasereview` run can hang with no error.
+1. **A restart without the credential kills in-flight runs for good** (`internal/runner/runner.go:97-101`, `:152-164`, `:223-227`)
+   - **What this is:** After a restart, `ResumeAll` drives every unfinished run. `drive` asks `fromState` for the executor. For a `claude` run, `fromState` fails if `r.Auth` is empty.
+   - **Problem:** When `fromState` fails, `drive` writes a `run_finished` event with status failed. Suppose you run `factory serve` again in a new shell and forget to export the token. The server prints a warning, then marks every half-done Claude run as failed. A failed run cannot be resumed.
+   - **Fix:** In `ResumeAll`, skip runs whose executor is `claude` while `r.Auth == ""`. Log a warning and leave them running. They resume at the next start that has a token. Add a small test.
+   - **If we skip it:** One forgotten `export` loses a run that has already spent money.
 
-2. **Failed eval runs leave the pass rate** (`cmd/factory/eval.go`, `runEvals` and `evalOnce`)
-   - **What this is:** Each eval run is recorded and counted in the pass-rate summary.
-   - **Problem:** When `evalOnce` returns an error, `runEvals` prints it and drops the run. Examples are the new "logged nothing for N minutes" case and a failed `startRun`. The summary then divides by `len(rs)`. If 1 of 10 runs hangs and the other 9 pass, it prints `9/9`. Commit 0a0be7a says "the pass rate counts every run", and this path breaks that.
-   - **Fix:** On error, record a result with `Pass: false`, `Status: "error"` and `Reason: err.Error()`. Keep the run id when you have one. This costs a few lines.
-   - **If we skip it:** The "8 of 10 runs pass" gate for phase 1 can look met when a run was lost.
+2. **File names with leading white space break the new `-z` handling** (`internal/workspace/workspace.go:98-106`, `:84-87`)
+   - **What this is:** The `-z` option makes git print raw file names, separated by NUL bytes. The commit says this fixes odd names.
+   - **Problem:** `git()` ends with `strings.TrimSpace` on the whole output. That cuts leading white space from the first name. Suppose the agent creates a file named `" notes.txt"` and it sorts first. `NewFiles` returns `"notes.txt"`. Then `removeBinaries` calls `Lstat` on a path that does not exist, and the node fails as an infra error. It retries five times, and the run fails. `TestNodeWorkflow` does not cover this case.
+   - **Fix:** Do not trim output that comes from `-z`. For example, make `git()` return the raw output and trim in the callers that need it. Add a name with a leading space to the test.
+   - **If we skip it:** A rare file name ends a run with a confusing error.
 
-3. **The credential is on the bwrap command line** (`internal/sandbox/sandbox.go`, `Command`; `internal/executor/claude.go`, `agent`)
-   - **What this is:** The sandbox passes each environment variable as `--setenv KEY VALUE` on the `bwrap` command line. The agent's `Auth` value (`CLAUDE_CODE_OAUTH_TOKEN=...`) goes this way.
-   - **Problem:** Any user on the host can read the token with `ps` or `/proc/<pid>/cmdline`. This does not matter on a single-user laptop. It does matter on a shared dev box or CI host.
-   - **Fix:** Pass the arguments with bwrap's `--args FD` option, reading them from a pipe. Or document that the factory must run on a single-user host.
-   - **If we skip it:** The token leaks on a shared host. A leaked token buys usage on the plan.
+3. **No test for how eval counts lost runs** (`cmd/factory/eval.go:111-125`, `evalOnce`)
+   - **What this is:** The fourth commit says a run the eval loses is recorded as a failed run with status `error`. The pass rate is the factory's main score.
+   - **Problem:** The only new eval test is `TestHiddenTestsScoreAProduct`. Nothing tests the error branch, the usage-limit stop or the quiet-run cutoff. A later edit could drop failed runs from the count, and every test would still pass. The pass rate would then read too high.
+   - **Fix:** Add one test. Start a fake-executor run through `runner` and a test server, and make `evalOnce` fail. Check that the recorded line has `Pass=false` and `Status="error"`. The loop body that builds the failed record may need to move into a small function so the test can call it. Keep it small.
+   - **If we skip it:** The pass rate can quietly overstate success.
 
-4. **The timeout and usage-limit branches in `agent` have no test** (`internal/executor/claude.go`, `agent`; `claude_test.go`)
-   - **What this is:** An attempt past `NodeMinutes` is charged the full `NodeUSD`. A usage-limit error becomes `LimitError`, and a missing result becomes `InfraError`.
-   - **Problem:** These branches decide whether a run retries and how much budget it burns. Only the runner side of `LimitError` has a test, with a fake executor. The claude tests cover `ErrUsageLimit` itself. The mapping inside `agent` is untested. A swapped case would pass every test.
-   - **Fix:** Add a fake-claude test that prints a usage-limit result, and assert `errors.As` to `*LimitError`. For the timeout, make the limit a `time.Duration` in `Claude`, so a test can use 100ms instead of 1 minute.
-   - **If we skip it:** A wrong class means a retry that buys more usage, or a run that stops early.
+### Nice to have
+
+4. **The "first retry resumes" rule counts infra attempts** (`internal/runner/runner.go:~265`)
+   - **What this is:** `task.Resume = task.Attempt == 2 && ns.LastClass == event.Task`.
+   - **Problem:** Suppose attempt 1 hits an infra crash and attempt 2 fails the check. Attempt 3 is the first retry after a task failure. It starts from a clean worktree and a new session, although the session is still good. That costs the full price of a fresh run.
+   - **Fix:** Resume when `ns.TaskFailures == 1 && ns.LastClass == event.Task`.
+   - **If we skip it:** Some retries cost more than they need to.
+
+5. **The 31 passing runs predate the last three fix commits** (`evals/results/2026-11-06.jsonl`, README status)
+   - **What this is:** The README says the first batch passed in all 31 runs.
+   - **Problem:** Later commits changed what those runs go through. The check mounts the worktree read-only, build output is removed, and the credential moves into the process environment. Tests cover these with a fake `claude`, not the real one.
+   - **Fix:** Run one small real batch, for example `-n 3`, before you call the phase done.
+   - **If we skip it:** A fix could break the real agent, and only fake tests would show it.
 
 ### Prose
 
-5. **Two wording errors about the budget** (`guardrails.yaml`, `README.md`)
-   - **What this is:** The `budget` comment says "past this, the runtime starts no new node" for `run_usd`. The README says "`guardrails.yaml` sets each attempt's spending and time limits".
-   - **Problem:** The code stops at `st.CostUSD >= budget`, which means "at this", not "past this". `run_usd` limits the whole run, not an attempt.
-   - **Fix:** Write "at this, the runtime starts no new node". Write "sets the spending and time limits for each attempt and for the whole run".
-   - **If we skip it:** A reader sets the budget one node too high, or believes `run_usd` caps one attempt.
+6. **Unclear comment on the quiet-run limit** (`cmd/factory/eval.go`, in `evalOnce`)
+   - **What this is:** The comment says: "An attempt logs at least once per node time limit, and its check takes minutes, not more."
+   - **Problem:** It does not say why the margin is 10 minutes, and "takes minutes, not more" is vague. A reader cannot tell what to change if the check gets slower.
+   - **Fix:** For example: `// The run is lost if it logs nothing for the node time limit plus 10 minutes. The 10 minutes cover the check.`
+   - **If we skip it:** A later edit may change the margin without knowing what it protects.
 
-Verdict: fix 1 and 2 first. Items 3 to 5 can follow.
+Verdict: fix 1 and 2 first. Add 3 before you call the phase done. Items 4 to 6 can wait.
 
-Not checked: I did not run the tests or the sandbox, so bwrap behavior is read from code only. The agent and the check share one writable Go build cache (`.cache/go-build`). A hostile agent could plant cache entries, so the isolation is only as strong as that cache. The eval results were recorded before the third review fixes, so they do not show the final code.
+Not checked: I could not run anything. The tests, `go fix -diff` and `bwrap` behavior on real Linux are untested by me. I did not check the `evalgen` `tail` against the new `tail` in `internal/executor/claude.go` for duplication.

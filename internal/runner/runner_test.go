@@ -422,6 +422,24 @@ func TestLastNodeOverBudgetSucceeds(t *testing.T) {
 	}
 }
 
+// A restart without the credential must not fail a claude run that is
+// half done. The run waits for a start that has the credential.
+func TestResumeWithoutCredentialKeepsRun(t *testing.T) {
+	store := openStore(t)
+	data := event.RunCreatedData{Graph: mustParse(t, "name: g\nnodes:\n  - {id: a, kind: agent}"), Executor: "claude", Spec: "x"}
+	if _, err := store.Append(event.New("r-1", event.RunCreated, "", 0, data)); err != nil {
+		t.Fatal(err)
+	}
+	r := New(t.Context(), store, 1)
+	if err := r.ResumeAll(); err != nil {
+		t.Fatal(err)
+	}
+	r.Wait()
+	if st, _ := waitUntil(t, store, "r-1", "the log is read", func(*event.State, []event.Event) bool { return true }); st.Status != event.RunRunning {
+		t.Fatalf("run %s (%s); want it still running", st.Status, st.Reason)
+	}
+}
+
 type limited struct{}
 
 func (limited) Run(context.Context, executor.Task, func(string)) (executor.Result, error) {

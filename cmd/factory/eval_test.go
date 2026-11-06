@@ -1,11 +1,53 @@
 package main
 
 import (
+	"encoding/json/v2"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 )
+
+// A run the eval loses still counts, as a failed run, so the pass rate
+// never leaves it out.
+func TestLostRunsCountAsFailures(t *testing.T) {
+	refuse := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "no", http.StatusInternalServerError)
+	}))
+	defer refuse.Close()
+	repo, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo = filepath.Join(repo, "..", "..")
+	t.Chdir(t.TempDir()) // runEvals writes evals/results here
+	err = runEvals([]string{"-server", refuse.URL, "-db", "f.db", "-runs", "runs", "-n", "2",
+		"-graph", filepath.Join(repo, "graphs", "phase1.yaml"), filepath.Join(repo, "evals", "wordfreq")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join("evals", "results", time.Now().Format(time.DateOnly)+".jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("recorded %d runs, want 2:\n%s", len(lines), data)
+	}
+	for _, l := range lines {
+		var r evalResult
+		if err := json.Unmarshal([]byte(l), &r); err != nil {
+			t.Fatal(err)
+		}
+		if r.Pass || r.Status != "error" || !strings.Contains(r.Reason, "refused") || r.Eval != "wordfreq" {
+			t.Errorf("got %+v, want a failed wordfreq run with status error", r)
+		}
+	}
+}
 
 // The hidden tests score a product in the sandbox. They must still build and
 // run there with only the parts of the repo they need mounted.
