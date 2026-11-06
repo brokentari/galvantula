@@ -6,3 +6,4 @@ ui/node_modules/
 ui/dist/
 /runs/
 claude-token
+exports/
