@@ -75,7 +75,8 @@ var impl = graph.Node{ID: "impl", Kind: graph.Agent}
 
 func TestAgentPassesCheckAndMerges(t *testing.T) {
 	c, run := setUpRun(t)
-	fakeAgent(t, writeFile("main.go", goodMain))
+	// The agent also builds the program, which leaves a binary behind.
+	fakeAgent(t, writeFile("main.go", goodMain)+"go build -o built .\n")
 	res, err := run(Task{Node: impl, Attempt: 1})
 	if err != nil {
 		t.Fatal(err)
@@ -89,8 +90,10 @@ func TestAgentPassesCheckAndMerges(t *testing.T) {
 			t.Errorf("main lacks %s: %v", f, err)
 		}
 	}
-	if _, err := os.Stat(filepath.Join(repo, "product")); err == nil {
-		t.Error("the check's build left a binary in the product")
+	for _, bin := range []string{"product", "built"} {
+		if _, err := os.Stat(filepath.Join(repo, bin)); err == nil {
+			t.Errorf("binary %s reached the product", bin)
+		}
 	}
 	args, _ := os.ReadFile(filepath.Join(c.Root, "r", "home", "impl", "args"))
 	for _, want := range []string{"--safe-mode", "--session-id", "--max-budget-usd 1.00", "--append-system-prompt-file"} {

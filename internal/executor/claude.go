@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -41,7 +42,8 @@ const brief = `Build the program that spec.md describes, in this directory. AGEN
 - Write the code and its tests. Use only the standard library.
 - Do not change or delete a file that was here when you started: AGENTS.md, CLAUDE.md, spec.md, go.mod and .factory/. The check fails if you do.
 - Before you finish, make all of these pass: gofmt -l . (prints nothing), go vet ./..., go fix -diff ./... (prints nothing), go build ./... and go test ./...
-- Write NOTES.md: in a few lines, what you built and each assumption you made where the spec is unclear.`
+- Write NOTES.md: in a few lines, what you built and each assumption you made where the spec is unclear.
+- Do not leave build output, such as compiled programs, in the directory.`
 
 var tools = []string{"Read", "Write", "Edit", "Glob", "Grep", "Bash"}
 
@@ -181,6 +183,9 @@ func (c Claude) agent(ctx context.Context, repo workspace.Repo, t Task, log func
 	if err := c.check(ctx, repo, wt); err != nil {
 		return spent, fmt.Errorf("check failed:\n%w", err)
 	}
+	if err := removeBinaries(repo, wt, log); err != nil {
+		return spent, &InfraError{Err: err}
+	}
 	if _, err := repo.CommitAll(wt, fmt.Sprintf("%s: attempt %d", t.Node.ID, t.Attempt)); err != nil {
 		return spent, &InfraError{Err: err}
 	}
@@ -189,6 +194,29 @@ func (c Claude) agent(ctx context.Context, repo workspace.Repo, t Task, log func
 	}
 	log("merged into main")
 	return spent, nil
+}
+
+// removeBinaries deletes new files that hold a NUL byte, such as a program
+// the agent compiled, so they never reach the product's history.
+func removeBinaries(repo workspace.Repo, wt string, log func(string)) error {
+	files, err := repo.NewFiles(wt)
+	if err != nil {
+		return err
+	}
+	for _, f := range files {
+		path := filepath.Join(wt, f)
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if bytes.IndexByte(data[:min(len(data), 8000)], 0) >= 0 {
+			if err := os.Remove(path); err != nil {
+				return err
+			}
+			log("removed build output: " + f)
+		}
+	}
+	return nil
 }
 
 // check runs the factory's checks on a worktree. Build and test run the

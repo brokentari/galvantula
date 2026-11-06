@@ -72,6 +72,15 @@ func (r Repo) Changed(dir string) ([]string, error) {
 	return strings.Split(out, "\n"), nil
 }
 
+// NewFiles lists files in dir that git does not track yet.
+func (r Repo) NewFiles(dir string) ([]string, error) {
+	out, err := r.git(dir, "ls-files", "--others", "--exclude-standard")
+	if err != nil || out == "" {
+		return nil, err
+	}
+	return strings.Split(out, "\n"), nil
+}
+
 // Merge moves main forward to a node's branch.
 func (r Repo) Merge(node string) error {
 	_, err := r.git(r.Dir, "merge", "-q", "--ff-only", "node/"+node)
