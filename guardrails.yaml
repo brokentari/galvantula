@@ -1,5 +1,5 @@
 # Settings the factory reads at the start of each run. Phase 0 uses go and
-# models; phase 1 adds deps, review and tests (see Software Factory Plan.md).
+# models; phase 1 adds deps, review and tests (see Software Factory Plan.html).
 go:
   version: "1.27" # the go line in each product's go.mod; also filters the Go guidelines
 

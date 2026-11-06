@@ -3,7 +3,7 @@
 A software factory: a spec in plain English goes in, and a working Go project
 comes out. A Go runtime owns a graph of work. Claude Code runs each agent
 node. A React UI shows each run live. The full plan is in
-[Software Factory Plan.md](Software%20Factory%20Plan.md).
+[Software Factory Plan.html](Software%20Factory%20Plan.html).
 
 **Status: phase 0 (the first version) is done.** Its standards review ended
 with "Ship." (`docs/reviews/phase-0.md`). Two nice-to-have items from that
