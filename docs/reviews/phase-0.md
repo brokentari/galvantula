@@ -1,47 +1,53 @@
 # Review: phase-0
 
-Reviewer: claude-sonnet-5-5 at high effort, in a new session. Range: start..264a3dd. Date: 2026-11-06. Cost: $0.92.
+Reviewer: claude-sonnet-5-5 at high effort, in a new session. Range: start..bd11382. Date: 2026-11-06. Cost: $0.80.
 
-What this change does: It is the Phase 0 code plus three rounds of fixes. The code is a graph runtime with an event log, a fake executor, an HTTP/SSE server, a React UI, and the `evalgen` and `phasereview` tools that call headless Claude Code. This round reworks `phasereview`'s clean-tree check, adds a Host check and a 500 status to the server, adds a 30-second limit per product run in `evalkit`, and makes `evalgen` restore the old tests if the new ones fail. I assumed one developer on localhost running a handful of runs at a time.
+**What this change does:** It is the phase-0 skeleton of the software factory. A Go runtime runs a graph of nodes, using a SQLite event log, a fake executor, an HTTP/SSE server and a React UI. It also adds the shared standards block in `AGENTS.md`, `evalgen` (a model writes the hidden eval tests and the tool checks them) and `phasereview` (a new session reviews each phase). I assumed the expected load is one person on one machine, running `factory serve` locally. That is what the README describes.
 
-I found no bug or security hole in the runner, store, server or event fold. The Host check, the content-type check and the single-event plan success all hold up. I checked the `[::1]` Host form, the `0.0.0.0` Host, and the resume paths in `drive`.
+I could not run commands. I read the code and traced the flows.
+
+## Must fix
+
+None.
 
 ## Should fix
 
-1. **`phasereview` has no test, and its clean-tree rule has broken twice** (`cmd/phasereview/main.go:L74-80`, `L118-130`)
-   - **What this is:** Before a phase is called done, this command checks that the tree is clean, builds the diff, and reads the reviewer's `Verdict:` line. It exits 1 unless the verdict is exactly `Ship.`.
-   - **Problem:** Two review rounds in a row fixed this same clean-tree check, and no test pins it. A wrong pathspec (the git rule for which files count) again blocks the documented fix-and-rerun loop. Verdict parsing also has no test. The verdict check fails closed, so `**Verdict: Ship.**` counts as "no verdict line". There is one wrong message as well. When `git status` itself fails, the returned error still says "commit your changes first".
-   - **Fix:** Pull the verdict loop into `verdict(text string) string`. Add one table test with `Verdict: Ship.`, `Verdict: fix 1 first.` and no line. Add one test that uses `t.Chdir` into a temp git repo and checks that a changed `docs/reviews/x.md` leaves the tree clean while a changed `a.go` does not. Return the "commit your changes first" text only when `dirty != ""`.
-   - **If we skip it:** The next pathspec slip shows up only when someone runs the real review, and each run costs money.
+1. **A second `factory serve` on the same database resumes the runs of the first** (`cmd/factory/main.go`, `serve`)
+   - **What this is:** At start, `serve` opens the log and calls `run.ResumeAll()`. Only after that does it call `srv.ListenAndServe()`.
+   - **Problem:** Say a server is already running and you start another one by mistake, or start it again after a Ctrl-C that has not finished. The second process finds the port busy only after it has resumed every unfinished run. For each node still marked running, it writes a "runtime restarted" infra failure and starts the node again. The first server is still driving the same nodes. Both now write to one log, and the node counts are wrong. The second process then exits with "address in use".
+   - **Fix:** Bind the port first with `ln, err := net.Listen("tcp", *addr)`. Call `ResumeAll()` after it, and serve with `srv.Serve(ln)`. This covers the README flow. It does not cover two servers on different ports with one database. A lock file or an SQLite lock row would be needed for that, so leave it for later.
+   - **If we skip it:** One slip with the terminal leaves a run with doubled attempts and false failure counts. You cannot repair this, because the log is the only state.
 
 ## Nice to have
 
-2. **`countTests` can silently undercount** (`cmd/evalgen/main.go:L252-272`)
-   - **What this is:** It reads `go test -json` output line by line with `bufio.Scanner` and a 1 MB limit.
-   - **Problem:** If one line is longer than 1 MB, `Scan` stops and `sc.Err()` is never read. The counts then drop with no message. The reference check would report "0 tests pass", which hides the real cause.
-   - **Fix:** Use `for line := range strings.Lines(out)` and delete the `Scanner` and `Buffer` lines. That is shorter and has no limit.
-   - **If we skip it:** An eval with very long failure output gives a confusing count error.
+2. **`EVAL_PRODUCT` in your shell changes evalgen's checks** (`cmd/evalgen/main.go`, `check` and the `runTests` closure in `generate`)
+   - **What this is:** evalgen runs the hidden tests against the reference. Then it runs them against a do-nothing stub, passing `EVAL_PRODUCT=<stub>`. `run` starts from `os.Environ()`.
+   - **Problem:** If `EVAL_PRODUCT` is already set in your shell (the README tells you to use it for real products), the "passes on the reference" check and the final in-place run test that product instead.
+   - **Fix:** Pass `[]string{"EVAL_PRODUCT="}` for those runs. `evalkit.Build` uses `cmp.Or`, so an empty value falls back to the reference.
+   - **If we skip it:** evalgen can reject good tests, or keep bad ones, and the message will not say why.
 
-3. **The 30-second limit can hang if the product starts a child process** (`evals/evalkit/evalkit.go:L69-80`)
-   - **What this is:** `exec.CommandContext` kills the product after 30 seconds so one hung product fails one test.
-   - **Problem:** Stdout and stderr are `bytes.Buffer`, so `Run` waits for the pipes to close. A child process that inherited the pipes keeps `Run` blocked after the kill. The timeout then fails to protect the package.
-   - **Fix:** Add `cmd.WaitDelay = 5 * time.Second` before `cmd.Run()`. One line.
-   - **If we skip it:** A product that starts a background process can still hang the whole eval package.
+3. **A failed first move in `install` can delete the old tests** (`cmd/evalgen/main.go`, `install`)
+   - **What this is:** `install` moves the old files into `stage/old` and defers `os.RemoveAll(stage)`.
+   - **Problem:** If `swap(dir, old)` fails after it moved `hidden` but before it moved `reference` (for example, a permission error), `install` returns at once. The deferred `RemoveAll` then deletes the moved files. The later failure paths do restore them.
+   - **Fix:** `return errors.Join(err, swap(old, dir))`, the same as the next branch.
+   - **If we skip it:** You lose hidden tests in a rare failure. They are in git, so you can recover them.
 
-4. **`describeChange` runs a git command that is known to fail** (`cmd/phasereview/main.go:L148-153`)
-   - **What this is:** It builds the commit log for the reviewer.
-   - **Problem:** With the default base (the empty-tree id), it first runs `git log <tree>..HEAD`, which cannot work. It then overwrites that error with a second call.
-   - **Fix:** Pick the range first: `rng := "HEAD"`, and `if base != emptyTree { rng = base + "..HEAD" }`. Then make one `git log` call.
-   - **If we skip it:** Nothing breaks. It is two wasted lines.
+4. **`claude.Run` loses the error chain** (`internal/claude/claude.go`)
+   - **What this is:** When the JSON result does not parse, it returns `fmt.Errorf("claude -p: %v; ...", errors.Join(runErr, err), ...)`.
+   - **Problem:** `%v` turns the error into text. Callers cannot use `errors.Is` to see `context.Canceled` or an `exec.ExitError`.
+   - **Fix:** Use `%w` for the joined error.
+   - **If we skip it:** Nothing breaks today. It will hurt once the executor needs to tell a cancel from a crash.
 
 ## Prose
 
-5. **A heading personifies rules** (`Software Factory Plan.md:51`, `Software Factory Plan.html:563`)
-   - **What this is:** The heading "Rules that keep parallel work honest" is above the write-scope, frozen-test and `go.mod` rules.
-   - **Problem:** Work cannot be honest, so this is a figure of speech, and Orwell rule 1 forbids it. The last commit already replaced four others like it.
-   - **Fix:** Use "Rules for parallel work" in both files. In `evals/README.md`, replace "evalgen does not trust the model's report" with "evalgen checks the model's work itself".
-   - **If we skip it:** A reader has to work out what "honest" means here. The next phase review will report it again.
+5. **"DAG" and "fan-out" are never explained** (`Software Factory Plan.md`, "Ground rules"; `graphs/factory.yaml` node `approve-dag`)
+   - **What this is:** The plan uses "task DAG" from its first section on. The UI shows the gate title "Approve the DAG and its cost".
+   - **Problem:** "DAG" is jargon that is never defined (Orwell rule 5). "Fan-out" is the same. The README says "graph" and "run at the same time".
+   - **Fix:** At the first use, write "task graph (a graph with no cycles)". Change the gate title to "Approve the task graph and its cost". Replace "fan-out" with "run at the same time".
+   - **If we skip it:** A new reader has to guess what the term means.
+
+The Go code follows the guidelines I could check. I found no missed ones, and I saw no `go fix` issues in the diff. The tests I looked at cover the risky new logic. These are the Host check, the content-type and body limits, the install and restore, the clean-tree check, the verdict parser, and resume after a plan node.
 
 Verdict: fix 1 and 5 first.
-Lean: -5 lines possible.
-Not checked: I could not run anything, so I did not run the tests, `go fix -diff`, or the `claude` flags (`--safe-mode`, `--permission-prompts`, `--effort`). The Go json v2 behavior is from reading the code only. `evalgen` and `phasereview` run model-written code and commands on this machine by design, and I did not review that risk.
+
+Not checked: I could not run the checks or `claude`. I did not verify the `claude` flags (`--safe-mode`, `--permission-prompts`) or the npm versions. Risk to know: evalgen lets the model run `go test` and `go run` in your account, with your environment and network and no sandbox. This includes `ANTHROPIC_API_KEY` if you have it set. Use a key with a low spend limit.

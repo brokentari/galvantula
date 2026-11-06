@@ -1,5 +1,5 @@
 # The outer factory graph. You write it by hand; the plan node fills the
-# "tasks" slot with the task DAG at run time.
+# "tasks" slot with the task graph at run time.
 # Phase 0 leaves out the fix node and replanning; they come in phases 2 and 4.
 name: factory
 nodes:
@@ -19,13 +19,13 @@ nodes:
     deps: [architect]
 
   - id: plan
-    title: Emit the task DAG
+    title: Emit the task graph
     kind: plan
     deps: [approve-contract]
     retries: 1
 
   - id: approve-dag
-    title: Approve the DAG and its cost
+    title: Approve the task graph and its cost
     kind: gate
     deps: [plan]
 

@@ -126,7 +126,7 @@ func TestFactoryDemoRun(t *testing.T) {
 		t.Fatalf("run %s: %s", st.Status, st.Reason)
 	}
 
-	// Fan-out: both packages start before either one finishes.
+	// In parallel: both packages start before either one finishes.
 	firstEnd := min(index(evs, event.NodeSucceeded, "pkg-store"), index(evs, event.NodeFailed, "pkg-api"))
 	if index(evs, event.NodeStarted, "pkg-store") > firstEnd || index(evs, event.NodeStarted, "pkg-api") > firstEnd {
 		t.Error("pkg-store and pkg-api did not run at the same time")

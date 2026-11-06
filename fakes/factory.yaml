@@ -1,4 +1,4 @@
-# Fake behavior for graphs/factory.yaml. It shows fan-out (store and api run
+# Fake behavior for graphs/factory.yaml. It shows parallel work (store and api run
 # at the same time), a retry (api fails once), and both gates.
 default:
   duration: 3s

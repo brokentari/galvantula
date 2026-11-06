@@ -170,7 +170,7 @@ func generate(ctx context.Context, g guardrails.Guardrails, dir string, retries 
 	}
 
 	runTests := func(dir string) error {
-		if out, err := goCmd(".", nil, "test", "-count=1", "./"+filepath.ToSlash(dir)+"/hidden/"); err != nil {
+		if out, err := goCmd(".", []string{"EVAL_PRODUCT="}, "test", "-count=1", "./"+filepath.ToSlash(dir)+"/hidden/"); err != nil {
 			return fmt.Errorf("%w\n%s", err, out)
 		}
 		return nil
@@ -234,7 +234,8 @@ func check(work, name string, kit []byte, p *provenance) error {
 	}
 
 	pkg := "./" + name + "/hidden/"
-	passed, failed, out := testCounts(work, nil, pkg)
+	// An empty EVAL_PRODUCT means the reference, whatever the user's shell sets.
+	passed, failed, out := testCounts(work, []string{"EVAL_PRODUCT="}, pkg)
 	if failed > 0 || passed < minTests {
 		return fmt.Errorf("on the reference, %d tests pass and %d fail; all must pass and there must be at least %d:\n%s", passed, failed, minTests, out)
 	}
@@ -309,7 +310,7 @@ func install(work, dir, name string, runTests func(dir string) error) error {
 		return err
 	}
 	if err := swap(dir, old); err != nil {
-		return err
+		return errors.Join(err, swap(old, dir))
 	}
 	if err := swap(fresh, dir); err != nil {
 		return errors.Join(err, swap(old, dir))

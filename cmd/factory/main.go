@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -79,21 +80,30 @@ func serve(args []string) error {
 	}
 	defer store.Close()
 
+	// Bind the port before resuming runs. If another server already holds
+	// it, this one stops here, before it can drive that server's runs too.
+	// shortcut: two servers on different ports can still share one database; add a lock if that becomes a real setup.
+	ln, err := net.Listen("tcp", *addr)
+	if err != nil {
+		return err
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	run := runner.New(ctx, store, *workers)
 	if err := run.ResumeAll(); err != nil {
+		ln.Close()
 		return err
 	}
 
-	srv := &http.Server{Addr: *addr, Handler: server.New(store, run, *uiDir)}
+	srv := &http.Server{Handler: server.New(store, run, *uiDir)}
 	defer context.AfterFunc(ctx, func() {
 		shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		srv.Shutdown(shutdown)
 	})()
 	slog.Info("factory listening", "addr", *addr, "db", *dbPath)
-	if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
+	if err := srv.Serve(ln); !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
 	run.Wait()

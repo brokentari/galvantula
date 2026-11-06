@@ -79,7 +79,7 @@ func Run(ctx context.Context, o Options) (Result, error) {
 
 	var r Result
 	if err := json.Unmarshal(stdout.Bytes(), &r); err != nil {
-		return r, fmt.Errorf("claude -p: %v; stderr: %s", errors.Join(runErr, err), strings.TrimSpace(stderr.String()))
+		return r, fmt.Errorf("claude -p: %w; stderr: %s", errors.Join(runErr, err), strings.TrimSpace(stderr.String()))
 	}
 	if r.IsError {
 		return r, fmt.Errorf("claude -p ended with %s: %s", r.Subtype, r.Text)
