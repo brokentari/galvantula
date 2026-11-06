@@ -27,6 +27,13 @@ func TestNodeWorkflow(t *testing.T) {
 	if !slices.Equal(changed, []string{"AGENTS.md"}) {
 		t.Errorf("Changed = %v, want only AGENTS.md (new files do not count)", changed)
 	}
+	// git quotes a name like this one unless asked not to.
+	must(t, os.WriteFile(filepath.Join(wt, "café \"1\".txt"), nil, 0o644))
+	added, err := r.NewFiles(wt)
+	must(t, err)
+	if want := []string{"café \"1\".txt", "main.go"}; !slices.Equal(added, want) {
+		t.Errorf("NewFiles = %q, want %q", added, want)
+	}
 
 	must(t, r.Reset(wt))
 	if _, err := os.Stat(filepath.Join(wt, "main.go")); err == nil {

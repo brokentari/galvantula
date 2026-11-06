@@ -280,21 +280,69 @@ func TestResumeAfterPlanEmitted(t *testing.T) {
 	}
 }
 
-// tasks records every task it gets and fails the first ones.
+// tasks records every task it gets, and when, and fails the first ones.
 type tasks struct {
 	mu    sync.Mutex
 	seen  []executor.Task
+	at    []time.Time
 	fails int
+	infra bool // fail with infra errors, not task errors
 }
 
 func (x *tasks) Run(_ context.Context, t executor.Task, _ func(string)) (executor.Result, error) {
 	x.mu.Lock()
 	defer x.mu.Unlock()
 	x.seen = append(x.seen, t)
+	x.at = append(x.at, time.Now())
 	if t.Attempt <= x.fails {
-		return executor.Result{CostUSD: 1}, fmt.Errorf("check failed on attempt %d", t.Attempt)
+		err := fmt.Errorf("check failed on attempt %d", t.Attempt)
+		if x.infra {
+			return executor.Result{}, &executor.InfraError{Err: err}
+		}
+		return executor.Result{CostUSD: 1}, err
 	}
 	return executor.Result{CostUSD: 1}, nil
+}
+
+// The first infra retry starts at once. Later ones wait, and a shutdown
+// during the wait stops the node without waiting it out.
+func TestInfraRetriesBackOff(t *testing.T) {
+	store := openStore(t)
+	g := mustParse(t, "name: g\nnodes:\n  - {id: a, kind: agent}")
+	x := &tasks{fails: 2, infra: true}
+	r := New(t.Context(), store, 1)
+	r.infraBackoff = 200 * time.Millisecond
+	r.Executor = func(*event.State) (executor.Executor, error) { return x, nil }
+	run, err := r.Start(Run{Graph: g, Executor: "fake"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st, _ := waitUntil(t, store, run, "the run finishes", runDone); st.Status != event.RunSucceeded || len(x.at) != 3 {
+		t.Fatalf("run %s (%s) after %d attempts; want succeeded after 3", st.Status, st.Reason, len(x.at))
+	}
+	if d := x.at[1].Sub(x.at[0]); d >= r.infraBackoff {
+		t.Errorf("the first infra retry waited %s; it must start at once", d)
+	}
+	if d := x.at[2].Sub(x.at[1]); d < r.infraBackoff {
+		t.Errorf("the second infra retry waited %s, want at least %s", d, r.infraBackoff)
+	}
+
+	ctx, stop := context.WithCancel(t.Context())
+	slow := New(ctx, store, 1)
+	slow.infraBackoff = time.Hour
+	slow.Executor = func(*event.State) (executor.Executor, error) { return &tasks{fails: 5, infra: true}, nil }
+	if run, err = slow.Start(Run{Graph: g, Executor: "fake"}); err != nil {
+		t.Fatal(err)
+	}
+	waitUntil(t, store, run, "attempt 3 waits", func(st *event.State, _ []event.Event) bool { return st.Nodes["a"].Attempt == 3 })
+	stop()
+	done := make(chan struct{})
+	go func() { slow.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the shutdown waited for the backoff")
+	}
 }
 
 // The first retry resumes with the failure as feedback; the next starts over.
@@ -343,6 +391,28 @@ func TestRunBudgetStopsNewNodes(t *testing.T) {
 	}
 	if index(evs, event.NodeStarted, "b") >= 0 {
 		t.Error("b started after the budget was spent")
+	}
+}
+
+// The last node can take the cost past the budget. Its work is merged, so
+// the run succeeded.
+func TestLastNodeOverBudgetSucceeds(t *testing.T) {
+	store := openStore(t)
+	r := New(t.Context(), store, 1)
+	r.Executor = fast
+	var rails guardrails.Guardrails
+	rails.Budget.RunUSD = 4
+	run, err := r.Start(Run{
+		Graph:      mustParse(t, "name: g\nnodes:\n  - {id: a, kind: agent}"),
+		Executor:   "fake",
+		FakeScript: "nodes:\n  a: {cost_usd: 5}",
+		Rails:      rails,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st, _ := waitUntil(t, store, run, "the run finishes", runDone); st.Status != event.RunSucceeded {
+		t.Fatalf("run %s (%s); want succeeded", st.Status, st.Reason)
 	}
 }
 

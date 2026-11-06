@@ -5,8 +5,9 @@ comes out. A Go runtime owns a graph of work. Claude Code runs each agent
 node. A React UI shows each run live. The full plan is in
 [Software Factory Plan.html](Software%20Factory%20Plan.html).
 
-**Status: phase 1 (one sandboxed agent) is built. Its first eval batch
-passed the hidden tests in 30 of 30 runs (`evals/results/2026-11-06.jsonl`).** Phase 0 passed its standards review
+**Status: phase 1 (one sandboxed agent) is built. Its first eval runs
+passed the hidden tests in 31 of 31 runs: one trial run of wordfreq, then
+10 runs of each eval (`evals/results/2026-11-06.jsonl`).** Phase 0 passed its standards review
 (`docs/reviews/phase-0.md`).
 
 ## Run the demo

@@ -65,20 +65,20 @@ func (r Repo) Reset(dir string) error {
 // Changed lists files that main has and dir has changed or deleted,
 // committed or not. New files are not listed.
 func (r Repo) Changed(dir string) ([]string, error) {
-	out, err := r.git(dir, "diff", "--name-only", "main", "--", ".")
-	if err != nil || out == "" {
-		return nil, err
-	}
-	return strings.Split(out, "\n"), nil
+	out, err := r.git(dir, "diff", "--name-only", "-z", "main", "--", ".")
+	return names(out), err
 }
 
 // NewFiles lists files in dir that git does not track yet.
 func (r Repo) NewFiles(dir string) ([]string, error) {
-	out, err := r.git(dir, "ls-files", "--others", "--exclude-standard")
-	if err != nil || out == "" {
-		return nil, err
-	}
-	return strings.Split(out, "\n"), nil
+	out, err := r.git(dir, "ls-files", "--others", "--exclude-standard", "-z")
+	return names(out), err
+}
+
+// names splits git's -z output. Without -z, git quotes names with non-ASCII
+// bytes, quotes or newlines, and they no longer match the files.
+func names(out string) []string {
+	return strings.FieldsFunc(out, func(r rune) bool { return r == 0 })
 }
 
 // Merge moves main forward to a node's branch.

@@ -23,10 +23,8 @@ import (
 const (
 	// maxInfraFailures stops a node that keeps failing for reasons outside it.
 	maxInfraFailures = 5
-	// infraBackoff is the wait before the second retry after infra failures.
-	// It doubles each time, up to maxBackoff, so a rate limit can pass.
-	infraBackoff = 5 * time.Second
-	maxBackoff   = 2 * time.Minute
+	// maxBackoff caps the wait between infra retries.
+	maxBackoff = 2 * time.Minute
 )
 
 // ErrInvalid wraps the errors Start returns for a run that cannot start.
@@ -37,6 +35,9 @@ type Runner struct {
 	ctx     context.Context
 	store   *event.Store
 	workers int
+	// infraBackoff is the wait before the second retry after infra failures.
+	// It doubles each time, up to maxBackoff, so a rate limit can pass.
+	infraBackoff time.Duration
 
 	// Executor builds the executor for a run from its state. Tests replace it.
 	Executor func(st *event.State) (executor.Executor, error)
@@ -74,11 +75,12 @@ type outcome struct {
 // workers limits how many nodes of one run execute at the same time.
 func New(ctx context.Context, store *event.Store, workers int) *Runner {
 	r := &Runner{
-		ctx:     ctx,
-		store:   store,
-		workers: max(workers, 1),
-		Root:    "runs",
-		runs:    map[string]*active{},
+		ctx:          ctx,
+		store:        store,
+		workers:      max(workers, 1),
+		infraBackoff: 5 * time.Second,
+		Root:         "runs",
+		runs:         map[string]*active{},
 	}
 	r.Executor = r.fromState
 	return r
@@ -267,7 +269,7 @@ func (r *Runner) drive(id string, a *active) error {
 				// The first infra retry starts at once: a restart is not a rate limit.
 				var wait time.Duration
 				if ns.LastClass == event.Infra && ns.InfraFailures > 1 {
-					wait = min(infraBackoff<<(ns.InfraFailures-2), maxBackoff)
+					wait = min(r.infraBackoff<<(ns.InfraFailures-2), maxBackoff)
 				}
 				attempt := task.Attempt
 				if err := emit(event.New(id, event.NodeStarted, n.ID, attempt, nil)); err != nil {
@@ -409,21 +411,25 @@ func sleep(ctx context.Context, d time.Duration) error {
 
 // finished decides the run's outcome. Call it only when nothing is running.
 func finished(st *event.State, stop string) (event.RunStatus, string, bool) {
-	if stop != "" {
-		return event.RunFailed, stop, true
-	}
 	var stuck []string
 	for _, n := range st.Graph.Nodes {
 		switch st.Nodes[n.ID].Status {
-		case event.Waiting:
-			return "", "", false
 		case event.Succeeded:
+		case event.Waiting:
+			if stop == "" {
+				return "", "", false
+			}
+			stuck = append(stuck, n.ID)
 		default:
 			stuck = append(stuck, n.ID)
 		}
 	}
-	if len(stuck) > 0 {
-		return event.RunFailed, "nodes can never start: " + strings.Join(stuck, ", "), true
+	switch {
+	case len(stuck) == 0:
+		// The last node can take the cost past the budget. Its work is merged, so the run succeeded.
+		return event.RunSucceeded, "", true
+	case stop != "":
+		return event.RunFailed, stop, true
 	}
-	return event.RunSucceeded, "", true
+	return event.RunFailed, "nodes can never start: " + strings.Join(stuck, ", "), true
 }

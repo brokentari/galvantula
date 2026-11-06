@@ -268,9 +268,9 @@ func (c Claude) check(ctx context.Context, repo workspace.Repo, wt string) error
 	for _, step := range [][]string{
 		{"gofmt", "-l", "."},
 		{"go", "vet", "./..."},
-		{"go", "fix", "-diff", "./..."},            // exits non-zero when it has a change to suggest
-		{"go", "build", "-o", os.DevNull, "./..."}, // a single main package would otherwise leave its binary here
-		{"go", "test", "-count=1", "./..."},
+		{"go", "fix", "-diff", "./..."},                    // exits non-zero when it has a change to suggest
+		{"go", "build", "-o", os.DevNull, "./..."},         // a single main package would otherwise leave its binary here
+		{"go", "test", "-count=1", "-timeout=2m", "./..."}, // a hung test fails the check, not the worker
 	} {
 		out, err := sandbox.Command(ctx, box, step[0], step[1:]...).CombinedOutput()
 		quiet := step[0] == "gofmt" // gofmt lists files to fix and still exits 0

@@ -223,7 +223,7 @@ func hiddenTests(ctx context.Context, root, dir, product string) (passed, total 
 		Env: []string{"GOCACHE=" + cache, "GOMODCACHE=" + strings.TrimSpace(string(modCache)), "EVAL_PRODUCT=" + product,
 			"GOFLAGS=-buildvcs=false", "GOPROXY=off", "GOTOOLCHAIN=local", "GOTELEMETRY=off"},
 	}
-	out, _ := sandbox.Command(ctx, box, "go", "test", "-count=1", "-json", ".").Output()
+	out, _ := sandbox.Command(ctx, box, "go", "test", "-count=1", "-timeout=2m", "-json", ".").Output()
 	p, f, text := gotest.Count(string(out))
 	if p+f == 0 {
 		return 0, 0, fmt.Errorf("no hidden test ran:\n%s", text)
