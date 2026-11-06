@@ -1,31 +1,46 @@
 # Review: phase-1
 
-Reviewer: claude-sonnet-5-5 at high effort, in a new session. Range: 6189377..4b80b63. Date: 2026-11-06. Cost: $0.54.
+Reviewer: claude-sonnet-5-5 at high effort, in a new session. Range: 6189377..32512db. Date: 2026-11-06. Cost: $0.58.
 
-**What this change does:** It finishes phase 1. A Claude Code agent runs inside a bubblewrap sandbox (a Linux tool that hides most of the host from a command), and its work is checked and merged by the runtime. `factory eval` runs the evals through the server and scores each product with hidden tests. The last two commits add a $0.50 median cost limit and make `eval` write the factory commit on each result line. I assumed one developer on one machine, a few runs at a time, as the README says.
+What this change does: The server now finds its own git commit once at startup, and each `run_created` event records it. `factory eval` copies that commit from the run into each result line, so a result names the code that ran it. Results files do not make the commit `-dirty`. The workspace also turns off commit signing, so a host that signs commits cannot break the runtime's own commits. Earlier commits in this range add the sandboxed Claude executor, the eval command, and the review fixes. I read those as well.
 
-### Should fix
+Load I assumed: one person on one machine, running `factory eval` with `-parallel 1`, as the README says.
 
-1. **The recorded commit is the eval's tree, not the server's** (`cmd/factory/eval.go:L118`, `L124-138`)
-   - **What this is:** `factoryCommit()` runs `git rev-parse` and `git status` where `factory eval` runs. It writes the result into every line. The commit message says this keeps "batches from two versions never mix".
-   - **Problem:** The agent code does not run in the eval process. It runs in `factory serve`, which started earlier and may be on older code. You start the server, edit the executor, then run `factory eval`. Every line says the new commit, but the runs used the old code. The field gives false proof of the exact thing it exists to prove. Nothing tests it either: `TestLostRunsCountAsFailures` only checks that `Commit` is not empty.
-   - **Fix:** Compute the commit once in `serve` and put it in `RunCreatedData`, next to `Guardrails`. `evalOnce` then copies it from the run state, as it already does for `Implementer`. Regenerate `events.ts`. Add a test that the result's commit is the one in the run state.
-   - **If we skip it:** The after-fix batch that phase 1 needs can be recorded as one commit and run on another. You would decide that phase 1 is done from data that cannot be trusted.
+I found nothing that must be fixed. I checked these and they hold up:
+- The server's Host and Content-Type checks, which stop a web page from starting paid runs.
+- The credential, which travels in the sandbox environment and not on the command line.
+- The retry, resume and backoff logic in the runner.
+- The generated `ui/src/gen/events.ts`, which is in sync.
 
-### Nice to have
+**Must fix:** none.
 
-2. **A second batch on the same day is labelled "-dirty"** (`cmd/factory/eval.go:L138`)
-   - **What this is:** `git status --porcelain` lists untracked files. It reports a change if anything differs from `HEAD`.
-   - **Problem:** The first batch writes `evals/results/<date>.jsonl`, which is untracked until you commit it. The next `factory eval` then sees a change and adds `-dirty` to every line. The label then says nothing about the code.
-   - **Fix:** Add a pathspec to the status call: `git status --porcelain -- . ":!evals/results"`.
-   - **If we skip it:** Results from clean code are labelled `-dirty` until you commit the previous results.
+**Should fix:**
 
-3. **The host's git config can break the runtime's commits** (`internal/workspace/workspace.go:L97-101`)
-   - **What this is:** Every `git` call goes through `Repo.git`. It sets `user.name`, `user.email`, `hooksPath` and `fsmonitor`, but it still reads the user's global config.
-   - **Problem:** If the user has `commit.gpgsign=true`, every `commit` can fail or wait for a passphrase prompt. The runner treats that as an infra failure, retries it, and ends the run after 5.
-   - **Fix:** Add `"-c", "commit.gpgsign=false"` to the same `-c` list. This is one line.
-   - **If we skip it:** Factory runs fail on machines that sign commits, and the error looks like an agent failure.
+1. **`factoryCommit` has no test** (`cmd/factory/main.go`, `factoryCommit`)
+   - **What this is:** At startup, the server runs `git rev-parse` and `git status --porcelain -- . :!evals/results`. It builds the commit string from them, adding `-dirty` when the tree has changes.
+   - **Problem:** Three branches decide what every eval result says: git fails, the tree is dirty, and a change under `evals/results` is ignored. Nothing tests any of them. If the `:!evals/results` pathspec (git's "exclude this path" syntax) is wrong, every batch is marked `-dirty` and results from different versions look the same.
+   - **Fix:** Add one test. It runs `git init` in a temp folder and uses `t.Chdir` to move there. Then:
+     - Commit one file and expect a bare hash.
+     - Add `evals/results/x.jsonl` and expect no `-dirty`.
+     - Add any other file and expect `-dirty`.
+   - **If we skip it:** A broken pathspec or a git error produces a wrong label in every result, and nobody notices until two batches get compared.
 
-**Verdict:** fix 1 first. The rest is optional.
-**Lean:** nothing worth cutting.
-**Not checked:** I could not run commands. I did not run the tests or `go fix -diff`, and I did not confirm that the `uuid` import builds on Go 1.27. I found no prose problems.
+2. **No test shows the runner records the commit** (`internal/runner/runner.go`, `Start`; `internal/runner/runner_test.go`)
+   - **What this is:** `Start` puts `r.Commit` into `RunCreatedData.Commit`, and `Fold` copies it into `State.Commit`.
+   - **Problem:** The new eval test fakes the server and writes the event itself, so it never runs `Runner.Start`. If `Start` dropped the commit, every test would still pass and real results would have an empty commit.
+   - **Fix:** In `TestFactoryDemoRun`, set `r.Commit = "abc1234"` before `Start`. After the run, assert `st.Commit == "abc1234"`. This is two lines.
+   - **If we skip it:** A later edit to `Start` can silently drop the field, and the eval's whole purpose, naming the code that ran, fails with no test red.
+
+3. **Prose: wrong comment on the `Commit` field** (`cmd/factory/eval.go`, `evalResult.Commit`)
+   - **What this is:** A doc comment on the result field.
+   - **Problem:** It says "the server's commit when the run started". The code takes the commit once, when the server starts. If someone commits and then starts a run on the same server, the field still holds the older commit. The comment is wrong in exactly that case.
+   - **Fix:** Write `// the commit the server started on, with -dirty for uncommitted changes`.
+   - **If we skip it:** A reader trusts the field to name the code at run time.
+
+**Nice to have:** none.
+
+Verdict: fix 1, 2 and 3 first. They are small, and none of them blocks a run.
+
+Lean: no lean findings.
+
+Not checked: I did not run the tests or `go fix -diff`. I also could not confirm that `uuid` is a standard-library import in the installed Go 1.27.
