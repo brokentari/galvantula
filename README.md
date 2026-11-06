@@ -5,8 +5,9 @@ comes out. A Go runtime owns a graph of work. Claude Code runs each agent
 node. A React UI shows each run live. The full plan is in
 [Software Factory Plan.md](Software%20Factory%20Plan.md).
 
-**Status: phase 0 (the first version) is built and waits for its standards review**
-(`docs/reviews/phase-0.md`). There is no LLM in the runtime yet. A fake
+**Status: phase 0 (the first version) is done.** Its standards review ended
+with "Ship." (`docs/reviews/phase-0.md`). Two nice-to-have items from that
+review carry into phase 1. There is no LLM in the runtime yet. A fake
 executor plays a script, so you can watch the runtime and the UI work.
 
 ## Run the demo

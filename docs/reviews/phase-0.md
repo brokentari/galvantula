@@ -1,53 +1,25 @@
 # Review: phase-0
 
-Reviewer: claude-sonnet-5-5 at high effort, in a new session. Range: start..ed3a1b7. Date: 2026-11-06. Cost: $1.56.
+Reviewer: claude-sonnet-5-5 at high effort, in a new session. Range: start..fa6f4e4. Date: 2026-11-06. Cost: $0.76.
 
-**What this change does:** It is the whole of phase 0. It adds a Go runtime that runs a graph of nodes from an event log in SQLite, a fake executor, an HTTP/SSE server, and a React UI that shows runs live and replays them. It also adds three `evalgen`-written evals, the `evalgen` and `phasereview` tools that call headless Claude Code, and the pinned standards block. The latest commit adds claude.Run tests, an `evalgen` path check, and a corrected cycle error message.
+**What this change does:** It builds phase 0 of the software factory. The runtime drives a graph of nodes from an append-only SQLite event log. A fake executor plays scripted runs, an HTTP/SSE server feeds a React UI, and the eval specs get hidden tests from evalgen. It also adds the standards block for agents, plus `phasereview` for end-of-phase reviews. I assumed one developer running everything on localhost.
 
-I assumed one person running this on their own machine, with the server on localhost. I found no bugs and no security holes at that load. I traced the runner's gate, retry and resume paths, the SSE dedupe, the `localOnly` check, `install`/`putBack`, `countTests`, the `json/v2` payloads, and the Go 1.27 guidelines. None of them broke.
+I traced the main flows: the run loop, resume after a crash, plan output filling a slot, the SSE backlog and live handoff, the evalgen install and restore path, and the server's Host and Content-Type checks. I found no bug, security hole or data-loss path. I checked Go against the modern guidelines (json/v2, `cmp.Or`, `slices`, `errors.AsType`, `WaitGroup.Go`, `strings.Lines`, `context.AfterFunc`) and found nothing missed. The prose reads plainly. I found no stock phrases or avoidable jargon, so the Prose group is empty.
 
-## Should fix
+### Nice to have
 
-1. **`install` can delete the old tests it failed to put back** (`cmd/evalgen/main.go`, `install`, the `defer os.RemoveAll(stage)` near the top)
-   - **What this is:** `install` moves the old tests into a staging folder inside the eval folder. It moves the new ones in, runs `go test`, and calls `putBack` if that fails. The whole design exists so a failed install never loses the old tests.
-   - **Problem:** The `defer` removes the staging folder on every exit, including when `putBack` itself fails. Suppose a `Rename` fails with a permission error halfway through putting back. The old files that did not move back are still in `stage/old`, and the `defer` deletes them. The error is reported, but the files are gone.
-   - **Fix:** Remove the staging folder only when nothing is left in it. Set a `keep` flag when `putBack` returns an error, and make the `defer` skip `RemoveAll` when `keep` is set. Put the staging path in the returned error so the user can recover by hand.
-   - **If we skip it:** A rare filesystem error during rollback loses the old hidden tests. If they are not committed, they are lost for good.
+1. **`-budget` can turn into "no cap" at the very end** (`cmd/evalgen/main.go`, retry loop; `internal/claude/claude.go`, budget flag)
+   - **What this is:** After a failed check, evalgen resumes the model with the money left: `left := budget - p.CostUSD`. `claude.Run` writes it with `strconv.FormatFloat(..., 'f', 2, 64)`.
+   - **Problem:** If `left` is positive but under half a cent, such as 0.004, the flag value becomes `"0.00"`. I could not confirm what `claude` does with `0.00`. It may read it as "no limit", which would break the "hard cap" the last commit set out to add.
+   - **Fix:** In evalgen, change `left <= 0` to `left < 0.01`. One line.
+   - **If we skip it:** The failure needs spend to land within half a cent below the budget, so it is rare. If it happens, one eval run could go past `-budget`.
 
-2. **The new path check has no test** (`cmd/evalgen/main.go`, `generate`, the `filepath.IsLocal` check)
-   - **What this is:** The commit says evalgen now rejects an eval path outside the repo before any model call. That is a trust-boundary check, and it is what keeps `install` and its `RemoveAll` calls inside the repo.
-   - **Problem:** Nothing fails if someone removes or weakens the check. The model call is the expensive part, so the order of "check, then call" matters.
-   - **Fix:** Add a small test that calls `generate` with `/tmp/x` and with `../x`, using a zero `guardrails.Guardrails`. Assert that it returns an error. If the check ran too late, the call would fail on `spec.md` or reach the model instead.
-   - **If we skip it:** A later edit can silently let `evalgen ../somewhere` replace files outside `evals/`.
+2. **The UI copies the whole event list for every event** (`ui/src/App.tsx`, `useEvents`)
+   - **What this is:** Each live event runs `[...s.events, e]`.
+   - **Problem:** This costs O(n²) over a run. The fake demo has about 60 events, so it is fine now. Once phase 1 streams real agent output, a run with 20,000 log events does about 200 million element copies, and the page will stutter.
+   - **Fix:** Do this when phase 1 lands. Keep events in a ref and bump a counter to re-render, or cap the stored log events per node.
+   - **If we skip it:** Nothing breaks in phase 0. Long real runs will make the UI sluggish.
 
-## Nice to have
+**Verdict: Ship.**
 
-3. **The budget flag is not a hard cap** (`cmd/evalgen/main.go`, the retry loop: `opts.MaxBudgetUSD = max(budget-p.CostUSD, 1)`)
-   - **What this is:** `-budget` is documented as "most dollars to spend on one eval". Each retry gets whatever is left of it.
-   - **Problem:** The `max(..., 1)` floor gives every retry at least $1, even when the budget is used up. With `-budget 20` and two retries, the spend can reach about $22.
-   - **Fix:** If `budget-p.CostUSD <= 0`, return an error. Otherwise pass the remainder as it is, without the floor.
-   - **If we skip it:** Spend can exceed the flag by a small, known amount.
-
-4. **Two copies of the plan** (`Software Factory Plan.md` and `.html`)
-   - **What this is:** The md file says it has the same text as the HTML file. Both files hold the full plan.
-   - **Problem:** Every plan edit must be made twice. The copies already differ: the HTML says "Dashed edges have caps" and "the shaded nodes", and the md says "Retry edges have caps" and "the generated nodes". Earlier review fixes, such as the node-kinds count and the `approve-tasks` rename, had to be made in both.
-   - **Fix:** Pick one source. Keep the md because agents read it, and keep the HTML only if you need the diagrams.
-   - **If we skip it:** The two files drift, and a reader may follow the stale one.
-
-## Prose
-
-5. **Stock figures of speech** (`README.md`; `Software Factory Plan.md` and `.html`; `cmd/evalgen/main.go`, the `role` prompt)
-   - **What this is:** Several headings and phrases use figures of speech you have seen many times: "Ground rules" (plan), "How it fits together" (README), "skeleton" (README status and the phase 0 name), and "They are the ground truth" (the evalgen prompt to the model).
-   - **Problem:** Orwell rule 1 forbids these. Each can be plainer, and "ground truth" in the prompt is a figure the model must interpret.
-   - **Fix:** Use "Rules", "How the parts connect", "first version" and "They decide whether the build is right".
-   - **If we skip it:** It is a style defect only, but the repo's own rules count it as Should fix.
-
-6. **Two terms for one thing** (`ui/src/NodePanel.tsx`; `ui/src/state.ts`)
-   - **What this is:** The failure class `infra` has three names in user-facing text. The node panel says "N not the node's fault". `state.ts` log lines and `describe()` say "infrastructure". The plan says "infrastructure failures".
-   - **Problem:** The STE rule says to use one term for one thing. A reader may think "not the node's fault" is a different class from "infrastructure".
-   - **Fix:** In `NodePanel.tsx`, change the text to `` `${view.infraFailures} infrastructure failures (not counted)` ``.
-   - **If we skip it:** The UI keeps two names for one concept.
-
-Verdict: fix 1, 2, 5 and 6 first.
-Lean: -264 lines possible (finding 4).
-Not checked: I did not run the tests or the UI build, and I did not confirm that the Claude Code flags (`--safe-mode`, `--permission-prompts`) exist in the installed version.
+**Not checked:** I did not run the tests or the Go checks, since I cannot run commands. I did not verify that the installed `claude` accepts `--safe-mode` or `--permission-prompts none`, or how it treats `--max-budget-usd 0.00`. I did not check that the pinned npm versions are at least two weeks old.
