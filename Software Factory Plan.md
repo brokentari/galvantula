@@ -48,7 +48,7 @@ The runtime knows five kinds of node. Each kind has one executor. The factory gr
 | merge | runtime git | commits a node's diff and merges it into the integration branch in dependency order; a conflict counts as a failure of that node |
 | plan | agent that emits graph | output must match a JSON schema and pass the graph rules before it becomes part of the graph |
 
-## Rules that keep parallel work honest
+## Rules for parallel work
 
 - **Frozen tests.** When you approve the contract, the runtime records a hash of each test file and interface file. A check fails if any of those files changes, or if a new `t.Skip` appears.
 - **Red before green.** The architect's tests must fail against the empty stubs. A test that passes on a stub tests nothing, so the contract gate rejects it.

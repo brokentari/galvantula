@@ -8,7 +8,6 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"crypto/sha256"
@@ -273,12 +272,10 @@ func testCounts(dir string, env []string, pkg string) (passed, failed int, outpu
 // keeps them as text.
 func countTests(out string) (passed, failed int, output string) {
 	var text strings.Builder
-	sc := bufio.NewScanner(strings.NewReader(out))
-	sc.Buffer(nil, 1<<20)
-	for sc.Scan() {
+	for line := range strings.Lines(out) {
 		var e struct{ Action, Test, Output string }
-		if json.Unmarshal(sc.Bytes(), &e) != nil {
-			text.WriteString(sc.Text() + "\n") // build errors are not JSON
+		if json.Unmarshal([]byte(line), &e) != nil {
+			text.WriteString(line) // build errors are not JSON
 			continue
 		}
 		text.WriteString(e.Output)

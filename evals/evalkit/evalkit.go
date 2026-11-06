@@ -67,6 +67,7 @@ func Run(t *testing.T, bin, dir, stdin string, args ...string) Result {
 	cmd.Stdin = strings.NewReader(stdin)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	cmd.WaitDelay = 5 * time.Second // a child that holds stdout must not outlive the timeout
 	err := cmd.Run()
 	res := Result{Stdout: stdout.String(), Stderr: stderr.String()}
 	if ctx.Err() != nil {

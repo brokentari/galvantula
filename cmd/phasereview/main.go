@@ -76,9 +76,13 @@ func review(phase, base, rails string) error {
 		return err
 	}
 	// The diff covers commits, but the reviewer reads the working tree, so
-	// the two must match. Review reports are left out of both.
-	if dirty, err := git("status", "--porcelain", "--", ".", ":(exclude)docs/reviews"); err != nil || dirty != "" {
-		return errors.Join(err, errors.New("commit your changes first, so the reviewer sees what the diff says"))
+	// the two must match.
+	dirty, err := uncommitted()
+	if err != nil {
+		return err
+	}
+	if dirty != "" {
+		return fmt.Errorf("commit your changes first, so the reviewer sees what the diff says:\n%s", dirty)
 	}
 	head, err := git("rev-parse", "--short", "HEAD")
 	if err != nil {
@@ -123,17 +127,29 @@ func review(phase, base, rails string) error {
 	if err := os.WriteFile(out, []byte(report), 0o644); err != nil {
 		return err
 	}
-	verdict := "no verdict line"
-	for line := range strings.Lines(res.Text) {
-		if v, ok := strings.CutPrefix(strings.TrimSpace(line), "Verdict:"); ok {
-			verdict = strings.TrimSpace(v)
-		}
-	}
-	log.Printf("wrote %s ($%.2f): verdict: %s", out, res.CostUSD, verdict)
-	if verdict != "Ship." {
+	v := verdict(res.Text)
+	log.Printf("wrote %s ($%.2f): verdict: %s", out, res.CostUSD, v)
+	if v != "Ship." {
 		return errors.New("the verdict is not Ship")
 	}
 	return nil
+}
+
+// uncommitted lists changed files other than review reports, which the
+// review leaves out.
+func uncommitted() (string, error) {
+	return git("status", "--porcelain", "--", ".", ":(exclude)docs/reviews")
+}
+
+// verdict returns the text after the report's last "Verdict:" line.
+func verdict(report string) string {
+	v := "no verdict line"
+	for line := range strings.Lines(report) {
+		if rest, ok := strings.CutPrefix(strings.Trim(strings.TrimSpace(line), "*"), "Verdict:"); ok {
+			v = strings.Trim(strings.TrimSpace(rest), "*")
+		}
+	}
+	return strings.TrimSpace(v)
 }
 
 // describeChange returns the commit messages, the changed files and, if it
@@ -143,10 +159,11 @@ func describeChange(base string) (string, error) {
 	for _, p := range skipped {
 		pathspec = append(pathspec, ":(exclude)"+p)
 	}
-	logText, err := git("log", "--format=commit %h%n%B", base+"..HEAD")
+	commits := base + "..HEAD"
 	if base == emptyTree {
-		logText, err = git("log", "--format=commit %h%n%B", "HEAD")
+		commits = "HEAD"
 	}
+	logText, err := git("log", "--format=commit %h%n%B", commits)
 	if err != nil {
 		return "", err
 	}

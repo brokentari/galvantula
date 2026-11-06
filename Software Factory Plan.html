@@ -560,7 +560,7 @@ ul.rules li b { color: var(--ink); font-weight: 600; }
 </section>
 
 <section>
-  <h2>Rules that keep parallel work honest</h2>
+  <h2>Rules for parallel work</h2>
   <ul class="rules">
     <li><b>Frozen tests.</b> When you approve the contract, the runtime records a hash of each test file and interface file. A check fails if any of those files changes, or if a new <code>t.Skip</code> appears.</li>
     <li><b>Red before green.</b> The architect's tests must fail against the empty stubs. A test that passes on a stub tests nothing, so the contract gate rejects it.</li>

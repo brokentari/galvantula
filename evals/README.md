@@ -21,7 +21,7 @@ model in `guardrails.yaml`. That model writes the hidden tests, the reference
 and `assumptions.md`. `guardrails.yaml` refuses an `eval_author` that any
 builder role also uses, so the tests do not repeat the builders' mistakes.
 
-evalgen does not trust the model's report. It keeps the result only if:
+evalgen checks the model's work itself. It keeps the result only if:
 
 - every test passes on the reference;
 - at least 80% of the tests fail on a program that does nothing, so most tests check real behavior;
