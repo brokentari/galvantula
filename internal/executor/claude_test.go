@@ -119,6 +119,7 @@ func TestCheckFailures(t *testing.T) {
 		{"old for loop", writeFile("main.go", oldLoop), "go fix -diff"},
 		{"unformatted", writeFile("main.go", "package main\nfunc main(){}\n"), "gofmt -l"},
 		{"failing test", writeFile("main.go", goodMain) + writeFile("main_test.go", "package main\n\nimport \"testing\"\n\nfunc TestNo(t *testing.T) { t.Fatal(\"no\") }\n"), "go test"},
+		{"writes no code", "", "no packages to test"},
 		{"test writes to the worktree", writeFile("main.go", goodMain) + writeFile("main_test.go", "package main\n\nimport (\n\t\"os\"\n\t\"testing\"\n)\n\nfunc TestEdit(t *testing.T) {\n\tif err := os.WriteFile(\"spec.md\", nil, 0o644); err != nil {\n\t\tt.Fatal(err)\n\t}\n}\n"), "read-only file system"},
 	}
 	for _, tt := range tests {
@@ -172,9 +173,14 @@ func TestAgentFailureClasses(t *testing.T) {
 		t.Errorf("usage limit: got %v, want a LimitError", err)
 	}
 
+	fakeAgent(t, "exit 3") // crashed: no result line
+	if res, err := run(Task{Node: impl, Attempt: 2}); !IsInfra(err) || res.CostUSD != 0 {
+		t.Errorf("crash: got %v at $%v, want an infra failure at $0", err, res.CostUSD)
+	}
+
 	c.timeout = 500 * time.Millisecond
 	fakeAgent(t, "sleep 60")
-	res, err := c.Run(t.Context(), Task{Run: "r", Node: impl, Attempt: 2}, func(string) {})
+	res, err := c.Run(t.Context(), Task{Run: "r", Node: impl, Attempt: 3}, func(string) {})
 	if err == nil || IsInfra(err) || errors.As(err, new(*LimitError)) || !strings.Contains(err.Error(), "ran past") {
 		t.Errorf("timeout: got %v, want a task failure", err)
 	}

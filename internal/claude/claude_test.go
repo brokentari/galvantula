@@ -31,6 +31,7 @@ func TestRunResults(t *testing.T) {
 		{"model error", `echo '{"type":"result","subtype":"error_max_turns","is_error":true,"result":"boom"}'`, "error_max_turns: boom"},
 		{"not JSON", `echo 'claude: bad flag' >&2; exit 2`, "claude: bad flag"},
 		{"usage limit", `echo '{"type":"result","is_error":true,"result":"You have hit your usage limit · resets 5pm"}'`, "usage limit reached"},
+		{"usage limit on stderr only", `echo 'You have hit your usage limit' >&2; exit 1`, "usage limit reached"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

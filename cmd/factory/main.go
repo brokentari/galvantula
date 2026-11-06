@@ -196,7 +196,8 @@ func start(args []string) error {
 // startRun asks the server to start a run and returns its id.
 func startRun(addr string, req server.StartRequest) (string, error) {
 	body, _ := json.Marshal(req)
-	resp, err := http.Post(addr+"/api/runs", "application/json", bytes.NewReader(body))
+	client := &http.Client{Timeout: 30 * time.Second} // a stuck server must not hang the eval
+	resp, err := client.Post(addr+"/api/runs", "application/json", bytes.NewReader(body))
 	if err != nil {
 		return "", err
 	}
