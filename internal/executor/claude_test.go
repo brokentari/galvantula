@@ -75,8 +75,10 @@ var impl = graph.Node{ID: "impl", Kind: graph.Agent}
 
 func TestAgentPassesCheckAndMerges(t *testing.T) {
 	c, run := setUpRun(t)
-	// The agent also builds the program, which leaves a binary behind.
-	fakeAgent(t, writeFile("main.go", goodMain)+"go build -o built .\n")
+	// The agent also builds the program, which leaves a binary behind. It adds
+	// a binary test fixture, which must stay, and a link the runtime must not read.
+	fakeAgent(t, writeFile("main.go", goodMain)+"go build -o built .\n"+
+		"mkdir testdata && printf 'a\\000b' > testdata/sample.bin\nln -s /dev/zero zero\n")
 	res, err := run(Task{Node: impl, Attempt: 1})
 	if err != nil {
 		t.Fatal(err)
@@ -94,6 +96,9 @@ func TestAgentPassesCheckAndMerges(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(repo, bin)); err == nil {
 			t.Errorf("binary %s reached the product", bin)
 		}
+	}
+	if _, err := os.Stat(filepath.Join(repo, "testdata", "sample.bin")); err != nil {
+		t.Errorf("the binary fixture did not reach the product: %v", err)
 	}
 	args, _ := os.ReadFile(filepath.Join(c.Root, "r", "home", "impl", "args"))
 	for _, want := range []string{"--safe-mode", "--session-id", "--max-budget-usd 1.00", "--append-system-prompt-file"} {

@@ -5,8 +5,8 @@ comes out. A Go runtime owns a graph of work. Claude Code runs each agent
 node. A React UI shows each run live. The full plan is in
 [Software Factory Plan.html](Software%20Factory%20Plan.html).
 
-**Status: phase 1 (one sandboxed agent) is built and waits for its first
-real eval runs.** Phase 0 passed its standards review
+**Status: phase 1 (one sandboxed agent) is built. Its first eval batch
+passed the hidden tests in 30 of 30 runs (`evals/results/2026-11-06.jsonl`).** Phase 0 passed its standards review
 (`docs/reviews/phase-0.md`).
 
 ## Run the demo
@@ -71,7 +71,7 @@ pass rate, median cost and median time for each eval.
 | `internal/executor` | the executor interface, the fake executor, and the Claude Code executor with its check |
 | `internal/sandbox`, `internal/workspace` | the bubblewrap sandbox; the product repo and its worktrees |
 | `internal/server` | HTTP API and the server-sent event stream |
-| `cmd/factory` | `serve`, `start`, `validate` |
+| `cmd/factory` | `serve`, `start`, `eval`, `validate`, `standards` |
 | `cmd/gen-ts` | writes `ui/src/gen/events.ts` from the Go types |
 | `cmd/evalgen`, `cmd/phasereview` | eval test authoring and phase reviews, through headless Claude Code (`internal/claude`) |
 | `standards/` | the pinned skills and the renderer for the standards block |

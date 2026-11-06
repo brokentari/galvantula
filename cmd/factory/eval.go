@@ -78,7 +78,10 @@ func runEvals(args []string) error {
 		return err
 	}
 	defer store.Close()
-	lock, _ := standards.Lock()
+	lock, err := standards.Lock()
+	if err != nil {
+		return err
+	}
 	sum := sha256.Sum256(lock)
 	out := filepath.Join("evals", "results", time.Now().Format(time.DateOnly)+".jsonl")
 	if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
@@ -182,12 +185,16 @@ func evalOnce(store *event.Store, addr, root, dir, g string) (evalResult, error)
 		return r, nil
 	}
 	r.HiddenPassed, r.HiddenTotal, err = hiddenTests(context.Background(), root, dir, filepath.Join(root, id, "repo"))
+	if err != nil {
+		r.Reason = err.Error() // a product that does not build fails, and still counts
+	}
 	r.Pass = err == nil && r.HiddenTotal > 0 && r.HiddenPassed == r.HiddenTotal
-	return r, err
+	return r, nil
 }
 
 // hiddenTests runs an eval's hidden tests against a product, in the sandbox,
-// because they build and run the agent's code.
+// because they build and run the agent's code. The sandbox sees only the parts
+// of the repo the tests need: not the reference answers, tokens or other runs.
 func hiddenTests(ctx context.Context, root, dir, product string) (passed, total int, err error) {
 	repo, err := os.Getwd()
 	if err != nil {
@@ -206,15 +213,17 @@ func hiddenTests(ctx context.Context, root, dir, product string) (passed, total 
 	if err := os.MkdirAll(cache, 0o755); err != nil {
 		return 0, 0, err
 	}
+	hidden := filepath.Join(repo, dir, "hidden")
 	box := sandbox.Spec{
-		Dir:  repo,
-		RO:   []string{repo, product, strings.TrimSpace(string(modCache))},
+		Dir: hidden,
+		RO: []string{product, strings.TrimSpace(string(modCache)), hidden,
+			filepath.Join(repo, "go.mod"), filepath.Join(repo, "go.sum"), filepath.Join(repo, "evals", "evalkit")},
 		RW:   []string{cache, home},
 		Home: home,
 		Env: []string{"GOCACHE=" + cache, "GOMODCACHE=" + strings.TrimSpace(string(modCache)), "EVAL_PRODUCT=" + product,
 			"GOFLAGS=-buildvcs=false", "GOPROXY=off", "GOTOOLCHAIN=local", "GOTELEMETRY=off"},
 	}
-	out, _ := sandbox.Command(ctx, box, "go", "test", "-count=1", "-json", "./"+filepath.ToSlash(dir)+"/hidden/").Output()
+	out, _ := sandbox.Command(ctx, box, "go", "test", "-count=1", "-json", ".").Output()
 	p, f, text := gotest.Count(string(out))
 	if p+f == 0 {
 		return 0, 0, fmt.Errorf("no hidden test ran:\n%s", text)

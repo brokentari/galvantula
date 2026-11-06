@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -170,6 +171,9 @@ func (c Claude) agent(ctx context.Context, repo workspace.Repo, t Task, log func
 	case ctx.Err() != nil:
 		return spent, err // the runner is stopping
 	case errors.Is(err, context.DeadlineExceeded):
+		// shortcut: a killed agent leaves no result line with its cost, so charge
+		// the most one attempt may spend. Add up the stream's token usage if this overcounts.
+		spent.CostUSD = c.Rails.Budget.NodeUSD
 		return spent, fmt.Errorf("the agent ran past %s", limit)
 	case errors.Is(err, claude.ErrUsageLimit):
 		return spent, &LimitError{Err: err}
@@ -179,12 +183,13 @@ func (c Claude) agent(ctx context.Context, repo workspace.Repo, t Task, log func
 		return spent, err
 	}
 
+	// Remove build output first, so the check sees what main will get.
+	if err := removeBinaries(repo, wt, log); err != nil {
+		return spent, &InfraError{Err: err}
+	}
 	log("check")
 	if err := c.check(ctx, repo, wt); err != nil {
 		return spent, fmt.Errorf("check failed:\n%w", err)
-	}
-	if err := removeBinaries(repo, wt, log); err != nil {
-		return spent, &InfraError{Err: err}
 	}
 	if _, err := repo.CommitAll(wt, fmt.Sprintf("%s: attempt %d", t.Node.ID, t.Attempt)); err != nil {
 		return spent, &InfraError{Err: err}
@@ -196,8 +201,9 @@ func (c Claude) agent(ctx context.Context, repo workspace.Repo, t Task, log func
 	return spent, nil
 }
 
-// removeBinaries deletes new files that hold a NUL byte, such as a program
-// the agent compiled, so they never reach the product's history.
+// removeBinaries deletes new executable files that hold a NUL byte, such as a
+// program the agent compiled, so they never reach the product's history. It
+// keeps data files, such as a fixture in testdata, and skips links and devices.
 func removeBinaries(repo workspace.Repo, wt string, log func(string)) error {
 	files, err := repo.NewFiles(wt)
 	if err != nil {
@@ -205,11 +211,18 @@ func removeBinaries(repo workspace.Repo, wt string, log func(string)) error {
 	}
 	for _, f := range files {
 		path := filepath.Join(wt, f)
-		data, err := os.ReadFile(path)
+		info, err := os.Lstat(path)
 		if err != nil {
 			return err
 		}
-		if bytes.IndexByte(data[:min(len(data), 8000)], 0) >= 0 {
+		if !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 {
+			continue
+		}
+		bin, err := hasNUL(path)
+		if err != nil {
+			return err
+		}
+		if bin {
 			if err := os.Remove(path); err != nil {
 				return err
 			}
@@ -217,6 +230,22 @@ func removeBinaries(repo workspace.Repo, wt string, log func(string)) error {
 		}
 	}
 	return nil
+}
+
+// hasNUL reports whether the first 8000 bytes of a file hold a NUL byte, as git
+// does to tell binary files from text.
+func hasNUL(path string) (bool, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return false, err
+	}
+	defer f.Close()
+	head := make([]byte, 8000)
+	n, err := io.ReadFull(f, head)
+	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
+		return false, err
+	}
+	return bytes.IndexByte(head[:n], 0) >= 0, nil
 }
 
 // check runs the factory's checks on a worktree. Build and test run the

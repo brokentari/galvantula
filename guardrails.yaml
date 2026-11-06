@@ -3,15 +3,15 @@
 go:
   version: "1.27" # the go line in each product's go.mod; also filters the Go guidelines
 
-# Which model plays each role, and how hard it thinks. The eval author writes
-# the hidden tests that judge the factory, so it must be a model the factory
-# does not use for anything else.
 # Spending and time limits. A node that reaches its limit fails that attempt.
 budget:
   node_usd: 3        # most one agent attempt may spend
   run_usd: 12        # past this, the runtime starts no new node
   node_minutes: 20   # wall-clock limit for one agent attempt
 
+# Which model plays each role, and how hard it thinks. The eval author writes
+# the hidden tests that judge the factory, so it must be a model the factory
+# does not use for anything else.
 models:
   architect:   { model: claude-sonnet-5-5, effort: high }
   planner:     { model: claude-sonnet-5-5, effort: high }
