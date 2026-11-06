@@ -19,6 +19,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"syscall"
@@ -109,6 +110,9 @@ func serve(args []string) error {
 	run.Root, run.Auth = root, credential()
 	if run.Auth == "" {
 		slog.Warn("no CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY; only fake runs can start")
+	} else if err := sandboxReady(); err != nil {
+		ln.Close()
+		return fmt.Errorf("%w; unset the credential to serve fake runs only", err)
 	}
 	if err := run.ResumeAll(); err != nil {
 		ln.Close()
@@ -131,6 +135,20 @@ func serve(args []string) error {
 
 // credential returns the credential that sandboxed agents use, from this
 // process's environment. A token from claude setup-token comes first.
+// sandboxReady reports what agents need that this host lacks. Without the
+// check, each attempt would fail as if the agent were at fault.
+func sandboxReady() error {
+	if _, err := exec.LookPath("bwrap"); err != nil {
+		return errors.New("agents run in bubblewrap, which needs Linux and the bwrap command")
+	}
+	for _, p := range []string{"/usr/bin/go", "/usr/bin/gofmt"} {
+		if _, err := os.Stat(p); err != nil {
+			return fmt.Errorf("the sandbox finds tools only in /usr/bin, and %s is missing", p)
+		}
+	}
+	return nil
+}
+
 func credential() string {
 	for _, k := range []string{"CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"} {
 		if v := os.Getenv(k); v != "" {

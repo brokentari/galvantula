@@ -1,56 +1,51 @@
 # Review: phase-1
 
-Reviewer: claude-sonnet-5-5 at high effort, in a new session. Range: 6189377..33d7ef6. Date: 2026-11-06. Cost: $0.71.
+Reviewer: claude-sonnet-5-5 at high effort, in a new session. Range: 6189377..338be87. Date: 2026-11-06. Cost: $0.53.
 
-I checked the server's request guards, the graph ID rules, the generated TypeScript types and the SQLite settings. All of them hold. Findings below.
+What this change does: Phase 1 adds a real agent node. Claude Code runs in a bubblewrap sandbox (a Linux tool that hides the host's files) in its own git worktree. After the agent exits, the runtime checks the work, then commits and merges it. It also adds budgets, retry rules, a usage-limit stop, and `factory eval`, which runs evals N times and scores each product with hidden tests. I assumed the load is one person on one machine, with 1 to 3 runs at a time. I read the diff and spot-checked the runner and server code. I could not run any tests.
 
-**What this change does:** Phase 1 adds one real agent node. Claude Code runs inside a bubblewrap sandbox, in its own git worktree. The runtime checks its work, then commits and merges it. The change also adds spend and time limits, a usage-limit stop and `factory eval`. `factory eval` runs the specs N times and scores each product with hidden tests. The last four commits fix earlier review findings. I assumed one person running a local server, with eval runs one at a time.
+## Should fix
 
-### Must fix
-None.
+1. **A missing `bwrap` looks like the agent's fault** (`internal/sandbox/sandbox.go:L31-50`, `internal/claude/claude.go` Start error path, `cmd/factory/main.go` serve)
+   - **What this is:** Every agent attempt and every check step starts `bwrap`. The README's "Run a real agent" section never says that `bwrap` and Linux are needed.
+   - **Problem:** If `bwrap` is missing, `cmd.Start` fails with `claude -p: exec: "bwrap": not found`. That is not `ErrNoResult`, so it counts as a task failure. The run burns its 2 retries and ends with a vague "node build failed". This setup is likely, because your own platform is darwin, where `bwrap` does not exist.
+   - **Fix:** In `serve`, call `exec.LookPath("bwrap")` when a credential is set, and return a clear error if it is missing. Add one README line: "needs Linux and bubblewrap". Go also has to be reachable as `/usr/bin/go`, because the sandbox `PATH` is only `/usr/bin`.
+   - **If we skip it:** A new user wastes a few minutes finding a setup problem that the output blames on the agent.
 
-### Should fix
+2. **A blip during the resumed attempt throws away the check feedback and the session** (`internal/runner/runner.go:L268-272`, `internal/executor/claude.go:L142-163`)
+   - **What this is:** After the first task failure, the next attempt resumes the session with the check output as feedback. `Feedback` is `ns.LastError`, and `Resume` needs `LastClass == Task`.
+   - **Problem:** Say attempt 1 fails the check, and attempt 2 (the resume) fails with an infra error, such as "claude -p gave no result" from a rate limit. `LastError` is now the infra text and `LastClass` is `Infra`. So attempt 3 does not resume. It resets the worktree and starts a new session, and the brief says "The factory reported: infra: …". The real check output is lost and the session's context is paid for again. The latest commit fixed only the opposite order (infra first, then task).
+   - **Fix:** Keep the last task error apart. Add `LastTaskError string` to `NodeState`, set it only when `Class == Task`, and use it for `Feedback`. Resume when `TaskFailures == 1`, whatever the last class was. Add one runner test: a task failure, then an infra failure, then check the third `Task`.
+   - **If we skip it:** The agent gets misleading feedback and a fresh session at the cost of a full attempt, which is up to $3. This happens most under rate limits.
 
-1. **A restart without the credential kills in-flight runs for good** (`internal/runner/runner.go:97-101`, `:152-164`, `:223-227`)
-   - **What this is:** After a restart, `ResumeAll` drives every unfinished run. `drive` asks `fromState` for the executor. For a `claude` run, `fromState` fails if `r.Auth` is empty.
-   - **Problem:** When `fromState` fails, `drive` writes a `run_finished` event with status failed. Suppose you run `factory serve` again in a new shell and forget to export the token. The server prints a warning, then marks every half-done Claude run as failed. A failed run cannot be resumed.
-   - **Fix:** In `ResumeAll`, skip runs whose executor is `claude` while `r.Auth == ""`. Log a warning and leave them running. They resume at the next start that has a token. Add a small test.
-   - **If we skip it:** One forgotten `export` loses a run that has already spent money.
+3. **The new retry timing test can fail on a slow machine** (`internal/runner/runner_test.go` `TestInfraRetriesBackOff`)
+   - **What this is:** The test says the first infra retry must start within 200 ms (`d >= r.infraBackoff` fails).
+   - **Problem:** Between the two attempts the runner writes events to SQLite, with fsync. On a loaded CI box that can take longer than 200 ms, so the test fails at random.
+   - **Fix:** Set `infraBackoff` to about 2 s and check that the first gap is less than half of it. Or compare the gaps: the second must be clearly longer than the first.
+   - **If we skip it:** The test fails on some runs and people stop trusting it.
 
-2. **File names with leading white space break the new `-z` handling** (`internal/workspace/workspace.go:98-106`, `:84-87`)
-   - **What this is:** The `-z` option makes git print raw file names, separated by NUL bytes. The commit says this fixes odd names.
-   - **Problem:** `git()` ends with `strings.TrimSpace` on the whole output. That cuts leading white space from the first name. Suppose the agent creates a file named `" notes.txt"` and it sorts first. `NewFiles` returns `"notes.txt"`. Then `removeBinaries` calls `Lstat` on a path that does not exist, and the node fails as an infra error. It retries five times, and the run fails. `TestNodeWorkflow` does not cover this case.
-   - **Fix:** Do not trim output that comes from `-z`. For example, make `git()` return the raw output and trim in the callers that need it. Add a name with a leading space to the test.
-   - **If we skip it:** A rare file name ends a run with a confusing error.
+## Nice to have
 
-3. **No test for how eval counts lost runs** (`cmd/factory/eval.go:111-125`, `evalOnce`)
-   - **What this is:** The fourth commit says a run the eval loses is recorded as a failed run with status `error`. The pass rate is the factory's main score.
-   - **Problem:** The only new eval test is `TestHiddenTestsScoreAProduct`. Nothing tests the error branch, the usage-limit stop or the quiet-run cutoff. A later edit could drop failed runs from the count, and every test would still pass. The pass rate would then read too high.
-   - **Fix:** Add one test. Start a fake-executor run through `runner` and a test server, and make `evalOnce` fail. Check that the recorded line has `Pass=false` and `Status="error"`. The loop body that builds the failed record may need to move into a small function so the test can call it. Keep it small.
-   - **If we skip it:** The pass rate can quietly overstate success.
+4. **An attempt cut off by a shutdown loses its cost** (`internal/runner/runner.go:L312-315`)
+   - **What this is:** On shutdown the outcome is dropped and the node stays "running". On restart it is recorded as an infra failure with cost 0.
+   - **Problem:** The killed agent may have spent up to `node_usd`. Several restarts in one run can pass `run_usd` without the runtime noticing.
+   - **Fix:** On shutdown, pass `o.res.CostUSD` into that later infra failure. This takes some plumbing, so accepting the gap and writing it down as a `shortcut:` comment is also fine.
+   - **If we skip it:** The run budget is a little too low after restarts.
 
-### Nice to have
+5. **The start API can spend your Claude plan, and the README does not say so** (`internal/server/server.go` `startRun`, README "Run a real agent")
+   - **What this is:** `POST /api/runs` with `executor: "claude"` now starts a paid agent. The server only checks the Host header and the JSON Content-Type.
+   - **Problem:** On a shared machine, any local user can `curl localhost:7070` and use the owner's token, with no limit on how many runs. Browsers are blocked by the checks.
+   - **Fix:** Add one README sentence: "the API has no login, so run the server only on a machine you alone use". The `-addr` help text already says this, but the README does not.
+   - **If we skip it:** Someone on a shared host is surprised by the bill.
 
-4. **The "first retry resumes" rule counts infra attempts** (`internal/runner/runner.go:~265`)
-   - **What this is:** `task.Resume = task.Attempt == 2 && ns.LastClass == event.Task`.
-   - **Problem:** Suppose attempt 1 hits an infra crash and attempt 2 fails the check. Attempt 3 is the first retry after a task failure. It starts from a clean worktree and a new session, although the session is still good. That costs the full price of a fresh run.
-   - **Fix:** Resume when `ns.TaskFailures == 1 && ns.LastClass == event.Task`.
-   - **If we skip it:** Some retries cost more than they need to.
+6. **A lost eval run keeps spending** (`cmd/factory/eval.go:L158-161`)
+   - **What this is:** After 30 quiet minutes, `evalOnce` gives up on the run and records an error.
+   - **Problem:** The server may still be running that run, which can spend up to `run_usd`. The error text asks the user to check the server, but nothing stops the run.
+   - **Fix:** Add one more sentence to the error text, with the run id, saying the run may still be going.
+   - **If we skip it:** A stuck run can cost up to $12 with no warning.
 
-5. **The 31 passing runs predate the last three fix commits** (`evals/results/2026-11-06.jsonl`, README status)
-   - **What this is:** The README says the first batch passed in all 31 runs.
-   - **Problem:** Later commits changed what those runs go through. The check mounts the worktree read-only, build output is removed, and the credential moves into the process environment. Tests cover these with a fake `claude`, not the real one.
-   - **Fix:** Run one small real batch, for example `-n 3`, before you call the phase done.
-   - **If we skip it:** A fix could break the real agent, and only fake tests would show it.
+**Prose:** I found no problems in the README, comments, guardrails text or commit messages. They use short active sentences and plain words.
 
-### Prose
+Verdict: fix 1 and 2 first, then 3.
 
-6. **Unclear comment on the quiet-run limit** (`cmd/factory/eval.go`, in `evalOnce`)
-   - **What this is:** The comment says: "An attempt logs at least once per node time limit, and its check takes minutes, not more."
-   - **Problem:** It does not say why the margin is 10 minutes, and "takes minutes, not more" is vague. A reader cannot tell what to change if the check gets slower.
-   - **Fix:** For example: `// The run is lost if it logs nothing for the node time limit plus 10 minutes. The 10 minutes cover the check.`
-   - **If we skip it:** A later edit may change the margin without knowing what it protects.
-
-Verdict: fix 1 and 2 first. Add 3 before you call the phase done. Items 4 to 6 can wait.
-
-Not checked: I could not run anything. The tests, `go fix -diff` and `bwrap` behavior on real Linux are untested by me. I did not check the `evalgen` `tail` against the new `tail` in `internal/executor/claude.go` for duplication.
+Not checked: I did not run any tests, including the sandbox, eval and bwrap tests. I did not check that the `uuid` import path resolves to the Go 1.27 standard library. `go.mod` lists `github.com/google/uuid` only as indirect. I did not run `go fix -diff`.

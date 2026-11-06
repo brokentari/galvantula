@@ -268,8 +268,9 @@ func (r *Runner) drive(id string, a *active) error {
 				ns := st.Nodes[n.ID]
 				task := executor.Task{Run: id, Node: n, Attempt: ns.Attempt + 1}
 				if ns.Attempt > 0 {
-					task.Feedback = ns.LastError
-					task.Resume = ns.TaskFailures == 1 && ns.LastClass == event.Task // an infra failure before it does not count
+					// An infra failure says nothing about the code, so it changes neither.
+					task.Feedback = ns.LastTaskError
+					task.Resume = ns.TaskFailures == 1
 				}
 				// The first infra retry starts at once: a restart is not a rate limit.
 				var wait time.Duration
@@ -311,6 +312,8 @@ func (r *Runner) drive(id string, a *active) error {
 			running--
 			if r.ctx.Err() != nil {
 				// Leave the node marked running, so a restart retries it.
+				// shortcut: the attempt's cost is lost, so restarts can let a run spend past
+				// run_usd. Record it with the restart's infra failure if restarts become common.
 				return nil
 			}
 			if err := r.complete(st, emit, o); err != nil {

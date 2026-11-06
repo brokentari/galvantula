@@ -157,6 +157,7 @@ type NodeState struct {
 	InfraFailures int
 	LastError     string
 	LastClass     FailureClass
+	LastTaskError string // the last failure that was the node's own, the feedback for its retry
 	CostUSD       float64
 }
 
@@ -257,6 +258,7 @@ func (s *State) Apply(e Event) error {
 			n.InfraFailures++
 		case Task:
 			n.TaskFailures++
+			n.LastTaskError = d.Error
 		}
 		n.LastError, n.LastClass = d.Error, d.Class
 		s.spend(n, d.CostUSD)

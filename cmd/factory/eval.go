@@ -176,7 +176,7 @@ func evalOnce(store *event.Store, addr, root, dir, g string) (evalResult, error)
 		// The run is lost if it logs nothing for the node time limit plus 10 minutes.
 		// The 10 minutes cover the check, which logs nothing while it runs.
 		if quiet := time.Since(last); quiet > time.Duration(st.Rails.Budget.NodeMinutes+10)*time.Minute {
-			return evalResult{Run: id}, fmt.Errorf("run %s logged nothing for %s; check that the server still runs it", id, quiet.Round(time.Minute))
+			return evalResult{Run: id}, fmt.Errorf("run %s logged nothing for %s. It may still be running and spending: check the server", id, quiet.Round(time.Minute))
 		}
 	}
 	r := evalResult{

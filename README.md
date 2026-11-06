@@ -37,9 +37,11 @@ Use **Replay** and the slider to step through any run, event by event.
 
 ## Run a real agent
 
-Agents run Claude Code inside a bubblewrap sandbox, which cannot see your
-home folder, so they need their own credential. Create one with
-`claude setup-token` (it uses your Claude subscription), or use an API key:
+Agents need Linux with bubblewrap (`bwrap`), and Go at `/usr/bin/go`: the
+sandbox shows only `/usr` and searches only `/usr/bin` for commands. The
+sandbox cannot see your home folder, so agents need their own credential.
+Create one with `claude setup-token` (it uses your Claude subscription), or
+use an API key:
 
 ```
 export CLAUDE_CODE_OAUTH_TOKEN=...   # or ANTHROPIC_API_KEY=...
@@ -51,6 +53,9 @@ Each run's product is a git repo in `runs/<run>/repo`. The agent works in
 `runs/<run>/nodes/<node>`; the runtime commits and merges its work after the
 check passes. `guardrails.yaml` sets the spending and time limits for each
 attempt and for the whole run.
+
+The server's API has no login. Anyone who can reach it can start agents
+with your credential, so run the server only on a machine that you alone use.
 
 To score the factory, run the evals against a running server:
 

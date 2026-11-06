@@ -286,13 +286,13 @@ func TestResumeAfterPlanEmitted(t *testing.T) {
 	}
 }
 
-// tasks records every task it gets, and when, and fails the first ones.
+// tasks records every task it gets, and when. errs[i] fails attempt i+1;
+// later attempts succeed. Each attempt costs $1.
 type tasks struct {
-	mu    sync.Mutex
-	seen  []executor.Task
-	at    []time.Time
-	fails int
-	infra bool // fail with infra errors, not task errors
+	mu   sync.Mutex
+	seen []executor.Task
+	at   []time.Time
+	errs []error
 }
 
 func (x *tasks) Run(_ context.Context, t executor.Task, _ func(string)) (executor.Result, error) {
@@ -300,14 +300,33 @@ func (x *tasks) Run(_ context.Context, t executor.Task, _ func(string)) (executo
 	defer x.mu.Unlock()
 	x.seen = append(x.seen, t)
 	x.at = append(x.at, time.Now())
-	if t.Attempt <= x.fails {
-		err := fmt.Errorf("check failed on attempt %d", t.Attempt)
-		if x.infra {
-			return executor.Result{}, &executor.InfraError{Err: err}
-		}
-		return executor.Result{CostUSD: 1}, err
+	if i := t.Attempt - 1; i < len(x.errs) {
+		return executor.Result{CostUSD: 1}, x.errs[i]
 	}
 	return executor.Result{CostUSD: 1}, nil
+}
+
+func checkFailed(attempt int) error { return fmt.Errorf("check failed on attempt %d", attempt) }
+
+var apiDown = &executor.InfraError{Err: errors.New("api down")}
+
+// An infra failure between a task failure and its retry must not lose the
+// check output or the session.
+func TestRetryAfterInfraKeepsTaskFeedback(t *testing.T) {
+	store := openStore(t)
+	x := &tasks{errs: []error{checkFailed(1), apiDown}}
+	r := New(t.Context(), store, 1)
+	r.Executor = func(*event.State) (executor.Executor, error) { return x, nil }
+	run, err := r.Start(Run{Graph: mustParse(t, "name: g\nnodes:\n  - {id: a, kind: agent, retries: 1}"), Executor: "fake"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st, _ := waitUntil(t, store, run, "the run finishes", runDone); st.Status != event.RunSucceeded {
+		t.Fatalf("run %s (%s); want succeeded", st.Status, st.Reason)
+	}
+	if got := x.seen[2]; !got.Resume || got.Feedback != "check failed on attempt 1" {
+		t.Errorf("attempt 3: resume %v, feedback %q; want a resume with the check output", got.Resume, got.Feedback)
+	}
 }
 
 // The first infra retry starts at once. Later ones wait, and a shutdown
@@ -315,9 +334,9 @@ func (x *tasks) Run(_ context.Context, t executor.Task, _ func(string)) (executo
 func TestInfraRetriesBackOff(t *testing.T) {
 	store := openStore(t)
 	g := mustParse(t, "name: g\nnodes:\n  - {id: a, kind: agent}")
-	x := &tasks{fails: 2, infra: true}
+	x := &tasks{errs: []error{apiDown, apiDown}}
 	r := New(t.Context(), store, 1)
-	r.infraBackoff = 200 * time.Millisecond
+	r.infraBackoff = 2 * time.Second
 	r.Executor = func(*event.State) (executor.Executor, error) { return x, nil }
 	run, err := r.Start(Run{Graph: g, Executor: "fake"})
 	if err != nil {
@@ -326,7 +345,7 @@ func TestInfraRetriesBackOff(t *testing.T) {
 	if st, _ := waitUntil(t, store, run, "the run finishes", runDone); st.Status != event.RunSucceeded || len(x.at) != 3 {
 		t.Fatalf("run %s (%s) after %d attempts; want succeeded after 3", st.Status, st.Reason, len(x.at))
 	}
-	if d := x.at[1].Sub(x.at[0]); d >= r.infraBackoff {
+	if d := x.at[1].Sub(x.at[0]); d >= r.infraBackoff/2 {
 		t.Errorf("the first infra retry waited %s; it must start at once", d)
 	}
 	if d := x.at[2].Sub(x.at[1]); d < r.infraBackoff {
@@ -336,7 +355,9 @@ func TestInfraRetriesBackOff(t *testing.T) {
 	ctx, stop := context.WithCancel(t.Context())
 	slow := New(ctx, store, 1)
 	slow.infraBackoff = time.Hour
-	slow.Executor = func(*event.State) (executor.Executor, error) { return &tasks{fails: 5, infra: true}, nil }
+	slow.Executor = func(*event.State) (executor.Executor, error) {
+		return &tasks{errs: []error{apiDown, apiDown, apiDown, apiDown, apiDown}}, nil
+	}
 	if run, err = slow.Start(Run{Graph: g, Executor: "fake"}); err != nil {
 		t.Fatal(err)
 	}
@@ -354,7 +375,7 @@ func TestInfraRetriesBackOff(t *testing.T) {
 // The first retry resumes with the failure as feedback; the next starts over.
 func TestRetriesResumeThenStartOver(t *testing.T) {
 	store := openStore(t)
-	x := &tasks{fails: 2}
+	x := &tasks{errs: []error{checkFailed(1), checkFailed(2)}}
 	r := New(t.Context(), store, 1)
 	r.Executor = func(*event.State) (executor.Executor, error) { return x, nil }
 	run, err := r.Start(Run{Graph: mustParse(t, "name: g\nnodes:\n  - {id: a, kind: agent, retries: 2}"), Executor: "fake"})
