@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/brokentari/galvantula/internal/graph"
+	"github.com/brokentari/galvantula/internal/guardrails"
 )
 
 // Type names an event.
@@ -37,7 +38,7 @@ var Payloads = map[Type]any{
 	GraphUpdated:  GraphUpdatedData{},
 	NodeStarted:   nil,
 	NodeLog:       NodeLogData{},
-	NodeSucceeded: nil,
+	NodeSucceeded: NodeSucceededData{},
 	NodeFailed:    NodeFailedData{},
 	GateWaiting:   nil,
 	GateDecided:   GateDecidedData{},
@@ -56,14 +57,22 @@ type Event struct {
 }
 
 type RunCreatedData struct {
-	Graph      graph.Graph `json:"graph"`
-	Executor   string      `json:"executor"`
-	FakeScript string      `json:"fake_script,omitempty"`
+	Graph      graph.Graph           `json:"graph"`
+	Executor   string                `json:"executor"` // "fake" or "claude"
+	FakeScript string                `json:"fake_script,omitempty"`
+	Spec       string                `json:"spec,omitempty"`
+	Guardrails guardrails.Guardrails `json:"guardrails,omitzero"`
 }
 
+// GraphUpdatedData is also how a plan node succeeds; CostUSD is that attempt's cost.
 type GraphUpdatedData struct {
-	Graph  graph.Graph `json:"graph"`
-	Reason string      `json:"reason"`
+	Graph   graph.Graph `json:"graph"`
+	Reason  string      `json:"reason"`
+	CostUSD float64     `json:"cost_usd,omitzero"`
+}
+
+type NodeSucceededData struct {
+	CostUSD float64 `json:"cost_usd,omitzero"`
 }
 
 type NodeLogData struct {
@@ -83,6 +92,7 @@ type NodeFailedData struct {
 	Error     string       `json:"error"`
 	Class     FailureClass `json:"class"`
 	WillRetry bool         `json:"will_retry"`
+	CostUSD   float64      `json:"cost_usd,omitzero"`
 }
 
 type GateDecidedData struct {
@@ -115,9 +125,13 @@ func New(run string, t Type, node string, attempt int, data any) Event {
 	return e
 }
 
-// Decode reads an event's data into a payload of type T.
+// Decode reads an event's data into a payload of type T. An event with no
+// data gives T's zero value.
 func (e Event) Decode[T any]() (T, error) {
 	var v T
+	if len(e.Data) == 0 {
+		return v, nil
+	}
 	if err := json.Unmarshal(e.Data, &v); err != nil {
 		return v, fmt.Errorf("event %d (%s): %w", e.Seq, e.Type, err)
 	}
@@ -140,6 +154,8 @@ type NodeState struct {
 	TaskFailures  int
 	InfraFailures int
 	LastError     string
+	LastClass     FailureClass
+	CostUSD       float64
 }
 
 // State is a run as its events describe it.
@@ -148,9 +164,17 @@ type State struct {
 	Graph      graph.Graph
 	Executor   string
 	FakeScript string
+	Spec       string
+	Rails      guardrails.Guardrails
+	CostUSD    float64
 	Status     RunStatus
 	Reason     string
 	Nodes      map[string]*NodeState
+}
+
+func (s *State) spend(n *NodeState, usd float64) {
+	n.CostUSD += usd
+	s.CostUSD += usd
 }
 
 // Fold rebuilds a run's state from its events, in order.
@@ -173,7 +197,7 @@ func (s *State) Apply(e Event) error {
 			return err
 		}
 		*s = State{Run: e.Run, Graph: d.Graph, Executor: d.Executor, FakeScript: d.FakeScript,
-			Status: RunRunning, Nodes: map[string]*NodeState{}}
+			Spec: d.Spec, Rails: d.Guardrails, Status: RunRunning, Nodes: map[string]*NodeState{}}
 		for _, n := range d.Graph.Nodes {
 			s.Nodes[n.ID] = &NodeState{Status: Pending}
 		}
@@ -193,6 +217,7 @@ func (s *State) Apply(e Event) error {
 		// crash cannot leave one write done and the other missing.
 		if n, ok := s.Nodes[e.Node]; ok {
 			n.Status = Succeeded
+			s.spend(n, d.CostUSD)
 		}
 		return nil
 	case RunFinished:
@@ -214,7 +239,12 @@ func (s *State) Apply(e Event) error {
 	case NodeStarted:
 		n.Status, n.Attempt = Running, e.Attempt
 	case NodeSucceeded:
+		d, err := e.Decode[NodeSucceededData]()
+		if err != nil {
+			return err
+		}
 		n.Status = Succeeded
+		s.spend(n, d.CostUSD)
 	case NodeFailed:
 		d, err := e.Decode[NodeFailedData]()
 		if err != nil {
@@ -225,7 +255,8 @@ func (s *State) Apply(e Event) error {
 		} else {
 			n.TaskFailures++
 		}
-		n.LastError = d.Error
+		n.LastError, n.LastClass = d.Error, d.Class
+		s.spend(n, d.CostUSD)
 		n.Status = Failed
 		if d.WillRetry {
 			n.Status = Pending

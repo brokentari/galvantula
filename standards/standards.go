@@ -97,6 +97,11 @@ func Replace(doc []byte, block string) ([]byte, error) {
 	return bytes.Join([][]byte{doc[:i], []byte(strings.TrimSuffix(block, "\n")), doc[j+len(End):]}, nil), nil
 }
 
+// Lock returns lock.json, which pins each vendored source to a commit and a hash.
+func Lock() ([]byte, error) {
+	return vendor.ReadFile("vendor/lock.json")
+}
+
 // Review returns the ponytail-review skill, which review nodes and phase
 // reviews follow.
 func Review() (string, error) {

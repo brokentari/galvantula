@@ -124,6 +124,9 @@ func (g gen) ts(t reflect.Type) string {
 		return g.ts(t.Elem())
 	case reflect.Struct:
 		n := name(t)
+		if n == "" {
+			panic("gen-ts: name this struct type; TypeScript needs a name: " + t.String())
+		}
 		if _, done := g.decls[n]; done {
 			return n
 		}

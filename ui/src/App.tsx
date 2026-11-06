@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { FactoryEvent, RunSummary } from "./gen/events";
 import { GraphView } from "./GraphView";
 import { NodePanel } from "./NodePanel";
@@ -29,7 +29,8 @@ function useRuns(): RunSummary[] {
 }
 
 interface Stream {
-  events: FactoryEvent[];
+  events: FactoryEvent[]; // grows in place; count changes with it
+  count: number;
   live?: RunView; // the run after every event so far
 }
 
@@ -37,17 +38,21 @@ interface Stream {
 // sends Last-Event-ID, so the server resumes where the stream stopped. Each
 // new event is applied once; only replay rebuilds the run from the start.
 function useEvents(runId: string | undefined): Stream {
-  const [stream, setStream] = useState<Stream>({ events: [] });
+  // Appending in place keeps a long run's log cheap; copying the list for
+  // each event would cost time that grows with the square of its length.
+  const all = useRef<FactoryEvent[]>([]);
+  const [stream, setStream] = useState<Stream>({ events: all.current, count: 0 });
   useEffect(() => {
-    setStream({ events: [] });
+    all.current = [];
+    setStream({ events: all.current, count: 0 });
     if (!runId) return;
     const es = new EventSource(`/api/runs/${runId}/events`);
     es.onmessage = (msg) => {
       const e = JSON.parse(msg.data) as FactoryEvent;
-      setStream((s) => {
-        const last = s.events.at(-1);
-        return last && last.seq >= e.seq ? s : { events: [...s.events, e], live: apply(s.live, e) };
-      });
+      const last = all.current.at(-1);
+      if (last && last.seq >= e.seq) return;
+      all.current.push(e);
+      setStream((s) => ({ events: all.current, count: all.current.length, live: apply(s.live, e) }));
     };
     return () => es.close();
   }, [runId]);
@@ -58,12 +63,12 @@ export function App() {
   const runs = useRuns();
   const [chosen, setChosen] = useState(() => location.hash.slice(1));
   const runId = chosen || runs[0]?.id;
-  const { events, live: liveRun } = useEvents(runId);
+  const { events, count, live: liveRun } = useEvents(runId);
   const [cursor, setCursor] = useState<number | null>(null); // null means live
   const [playing, setPlaying] = useState(false);
   const [selected, setSelected] = useState<string>();
 
-  const shown = useMemo(() => (cursor === null ? events : events.slice(0, cursor)), [events, cursor]);
+  const shown = useMemo(() => events.slice(0, cursor ?? count), [events, count, cursor]);
   const run = useMemo(() => (cursor === null ? liveRun : fold(shown)), [cursor, liveRun, shown]);
   const live = cursor === null;
 
@@ -131,6 +136,7 @@ export function App() {
                 <h2>Run {run.id}</h2>
                 <p className="muted">
                   Graph <span className="mono">{run.graph.name}</span>, version {run.graphVersion}, {run.graph.nodes.length} nodes.
+                  Spent ${run.costUSD.toFixed(2)}.
                 </p>
                 {run.reason && <p className={run.status === "failed" ? "error" : "muted"}>{run.reason}</p>}
                 <h3>Events</h3>

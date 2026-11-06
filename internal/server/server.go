@@ -18,6 +18,7 @@ import (
 
 	"github.com/brokentari/galvantula/internal/event"
 	"github.com/brokentari/galvantula/internal/graph"
+	"github.com/brokentari/galvantula/internal/guardrails"
 	"github.com/brokentari/galvantula/internal/runner"
 )
 
@@ -31,12 +32,16 @@ const (
 type server struct {
 	store  *event.Store
 	runner *runner.Runner
+	rails  guardrails.Guardrails
 }
 
-// StartRequest is the body of POST /api/runs.
+// StartRequest is the body of POST /api/runs. Executor is "fake", which
+// plays FakeScript, or "claude", which builds Spec.
 type StartRequest struct {
-	Graph      string `json:"graph"`       // graph YAML
-	FakeScript string `json:"fake_script"` // fake executor script YAML
+	Graph      string `json:"graph"` // graph YAML
+	Executor   string `json:"executor"`
+	FakeScript string `json:"fake_script,omitempty"` // YAML
+	Spec       string `json:"spec,omitempty"`        // markdown
 }
 
 // DecideRequest is the body of POST /api/runs/{run}/gates/{node}.
@@ -45,9 +50,10 @@ type DecideRequest struct {
 	Notes    string `json:"notes"`
 }
 
-// New returns the API handler. If uiDir is not empty, it also serves the UI from it.
-func New(store *event.Store, r *runner.Runner, uiDir string) http.Handler {
-	s := &server{store: store, runner: r}
+// New returns the API handler. New runs use rails. If uiDir is not empty,
+// it also serves the UI from it.
+func New(store *event.Store, r *runner.Runner, rails guardrails.Guardrails, uiDir string) http.Handler {
+	s := &server{store: store, runner: r, rails: rails}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/runs", s.listRuns)
 	mux.HandleFunc("POST /api/runs", s.startRun)
@@ -100,7 +106,7 @@ func (s *server) startRun(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
 		return
 	}
-	id, err := s.runner.Start(g, req.FakeScript)
+	id, err := s.runner.Start(runner.Run{Graph: g, Executor: req.Executor, FakeScript: req.FakeScript, Spec: req.Spec, Rails: s.rails})
 	switch {
 	case errors.Is(err, runner.ErrInvalid):
 		http.Error(w, err.Error(), http.StatusUnprocessableEntity)

@@ -45,6 +45,8 @@ export function NodePanel({ run, id, live, onClose }: { run: RunView; id: string
         <dd className={`status-text status-${view.status}`}>{view.status}</dd>
         <dt>attempt</dt>
         <dd>{view.attempt || "–"}</dd>
+        <dt>cost</dt>
+        <dd>${view.costUSD.toFixed(2)}</dd>
         <dt>retries</dt>
         <dd>
           {view.taskFailures} of {node.retries ?? 0} used

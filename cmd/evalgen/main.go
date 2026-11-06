@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"github.com/brokentari/galvantula/internal/claude"
+	"github.com/brokentari/galvantula/internal/gotest"
 	"github.com/brokentari/galvantula/internal/guardrails"
 	"github.com/brokentari/galvantula/standards"
 )
@@ -177,7 +178,7 @@ func generate(ctx context.Context, g guardrails.Guardrails, dir string, retries 
 		opts.Resume = res.SessionID
 		opts.Prompt = "The checks failed:\n\n" + checkErr.Error() + "\n\nFix the files, then run the checks again."
 		left := budget - p.CostUSD
-		if left <= 0 {
+		if left < 0.01 { // claude reads a budget under a cent as 0.00
 			return fmt.Errorf("checks still fail and the $%.2f budget is spent: %w", budget, checkErr)
 		}
 		opts.MaxBudgetUSD = left
@@ -280,31 +281,8 @@ func check(work, name string, kit []byte, p *provenance) error {
 // testCounts runs go test -json and counts top-level tests that pass and fail.
 func testCounts(dir string, env []string, pkg string) (passed, failed int, output string) {
 	out, _ := goCmd(dir, env, "test", "-count=1", "-json", pkg)
-	return countTests(out)
-}
-
-// countTests reads go test -json output. Build errors are not JSON, so it
-// keeps them as text.
-func countTests(out string) (passed, failed int, output string) {
-	var text strings.Builder
-	for line := range strings.Lines(out) {
-		var e struct{ Action, Test, Output string }
-		if json.Unmarshal([]byte(line), &e) != nil {
-			text.WriteString(line) // build errors are not JSON
-			continue
-		}
-		text.WriteString(e.Output)
-		if e.Test == "" || strings.Contains(e.Test, "/") {
-			continue
-		}
-		switch e.Action {
-		case "pass":
-			passed++
-		case "fail":
-			failed++
-		}
-	}
-	return passed, failed, tail(text.String(), 60)
+	passed, failed, text := gotest.Count(out)
+	return passed, failed, tail(text, 60)
 }
 
 // install moves the generated files into the repo, fixing import paths on

@@ -2,16 +2,19 @@ package runner
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/brokentari/galvantula/internal/event"
 	"github.com/brokentari/galvantula/internal/executor"
 	"github.com/brokentari/galvantula/internal/graph"
+	"github.com/brokentari/galvantula/internal/guardrails"
 )
 
 func openStore(t *testing.T) *event.Store {
@@ -96,7 +99,7 @@ func TestFactoryDemoRun(t *testing.T) {
 	r := New(t.Context(), store, 3)
 	r.Executor = fast
 
-	run, err := r.Start(mustParse(t, string(g)), string(script))
+	run, err := r.Start(Run{Graph: mustParse(t, string(g)), Executor: "fake", FakeScript: string(script)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,7 +162,7 @@ func TestResumeAfterRestart(t *testing.T) {
 	ctx, stop := context.WithCancel(t.Context())
 	first := New(ctx, store, 3)
 	first.Executor = func(*event.State) (executor.Executor, error) { return blockOnce{node: "b"}, nil }
-	run, err := first.Start(g, "")
+	run, err := first.Start(Run{Graph: g, Executor: "fake"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -225,7 +228,7 @@ func TestRunFails(t *testing.T) {
 			store := openStore(t)
 			r := New(t.Context(), store, 3)
 			r.Executor = fast
-			run, err := r.Start(mustParse(t, tt.graph), tt.script)
+			run, err := r.Start(Run{Graph: mustParse(t, tt.graph), Executor: "fake", FakeScript: tt.script})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -273,5 +276,71 @@ func TestResumeAfterPlanEmitted(t *testing.T) {
 	}
 	if i := index(evs, event.NodeStarted, "p"); slices.ContainsFunc(evs[i+1:], func(e event.Event) bool { return e.Type == event.NodeStarted && e.Node == "p" }) {
 		t.Error("the plan node ran again after its graph_updated event")
+	}
+}
+
+// tasks records every task it gets and fails the first ones.
+type tasks struct {
+	mu    sync.Mutex
+	seen  []executor.Task
+	fails int
+}
+
+func (x *tasks) Run(_ context.Context, t executor.Task, _ func(string)) (executor.Result, error) {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	x.seen = append(x.seen, t)
+	if t.Attempt <= x.fails {
+		return executor.Result{CostUSD: 1}, fmt.Errorf("check failed on attempt %d", t.Attempt)
+	}
+	return executor.Result{CostUSD: 1}, nil
+}
+
+// The first retry resumes with the failure as feedback; the next starts over.
+func TestRetriesResumeThenStartOver(t *testing.T) {
+	store := openStore(t)
+	x := &tasks{fails: 2}
+	r := New(t.Context(), store, 1)
+	r.Executor = func(*event.State) (executor.Executor, error) { return x, nil }
+	run, err := r.Start(Run{Graph: mustParse(t, "name: g\nnodes:\n  - {id: a, kind: agent, retries: 2}"), Executor: "fake"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, _ := waitUntil(t, store, run, "the run finishes", runDone)
+	if st.Status != event.RunSucceeded || st.CostUSD != 3 {
+		t.Fatalf("run %s (%s), cost %v; want succeeded at 3", st.Status, st.Reason, st.CostUSD)
+	}
+	want := []struct {
+		resume   bool
+		feedback string
+	}{{false, ""}, {true, "check failed on attempt 1"}, {false, "check failed on attempt 2"}}
+	for i, w := range want {
+		if got := x.seen[i]; got.Resume != w.resume || got.Feedback != w.feedback {
+			t.Errorf("attempt %d: resume %v, feedback %q; want %v, %q", i+1, got.Resume, got.Feedback, w.resume, w.feedback)
+		}
+	}
+}
+
+func TestRunBudgetStopsNewNodes(t *testing.T) {
+	store := openStore(t)
+	r := New(t.Context(), store, 1)
+	r.Executor = fast
+	var rails guardrails.Guardrails
+	rails.Budget.RunUSD = 4
+	run, err := r.Start(Run{
+		Graph:      mustParse(t, "name: g\nnodes:\n  - {id: a, kind: agent}\n  - {id: b, kind: agent, deps: [a]}"),
+		Executor:   "fake",
+		FakeScript: "nodes:\n  a: {cost_usd: 5}",
+		Rails:      rails,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, evs := waitUntil(t, store, run, "the run finishes", runDone)
+	if st.Status != event.RunFailed || !strings.Contains(st.Reason, "budget") {
+		t.Fatalf("run %s (%s); want failed on the budget", st.Status, st.Reason)
+	}
+	if index(evs, event.NodeStarted, "b") >= 0 {
+		t.Error("b started after the budget was spent")
 	}
 }

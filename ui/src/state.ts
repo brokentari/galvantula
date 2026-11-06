@@ -6,6 +6,7 @@ export interface NodeView {
   taskFailures: number;
   infraFailures: number;
   lastError?: string;
+  costUSD: number;
   logs: string[];
 }
 
@@ -15,12 +16,13 @@ export interface RunView {
   graphVersion: number;
   status: RunStatus;
   reason?: string;
+  costUSD: number;
   nodes: Record<string, NodeView>;
 }
 
 const maxLogLines = 200;
 
-const blank = (): NodeView => ({ status: "pending", attempt: 0, taskFailures: 0, infraFailures: 0, logs: [] });
+const blank = (): NodeView => ({ status: "pending", attempt: 0, taskFailures: 0, infraFailures: 0, costUSD: 0, logs: [] });
 
 export function fold(events: FactoryEvent[]): RunView | undefined {
   let run: RunView | undefined;
@@ -33,14 +35,15 @@ export function fold(events: FactoryEvent[]): RunView | undefined {
 export function apply(run: RunView | undefined, e: FactoryEvent): RunView | undefined {
   if (e.type === "run_created") {
     const nodes = Object.fromEntries(e.data.graph.nodes.map((n) => [n.id, blank()]));
-    return { id: e.run, graph: e.data.graph, graphVersion: 1, status: "running", nodes };
+    return { id: e.run, graph: e.data.graph, graphVersion: 1, status: "running", costUSD: 0, nodes };
   }
   if (!run) return run;
   if (e.type === "graph_updated") {
     const nodes = Object.fromEntries(e.data.graph.nodes.map((n) => [n.id, run.nodes[n.id] ?? blank()]));
     // The plan node that emitted the nodes succeeds in this same event.
-    if (e.node && nodes[e.node]) nodes[e.node] = { ...nodes[e.node], status: "succeeded" };
-    return { ...run, graph: e.data.graph, graphVersion: run.graphVersion + 1, nodes };
+    const cost = e.data.cost_usd ?? 0;
+    if (e.node && nodes[e.node]) nodes[e.node] = { ...nodes[e.node], status: "succeeded", costUSD: nodes[e.node].costUSD + cost };
+    return { ...run, graph: e.data.graph, graphVersion: run.graphVersion + 1, costUSD: run.costUSD + cost, nodes };
   }
   if (e.type === "run_finished") {
     return { ...run, status: e.data.status, reason: e.data.reason };
@@ -57,7 +60,7 @@ export function apply(run: RunView | undefined, e: FactoryEvent): RunView | unde
       next = { ...n, logs: [...n.logs, e.data.line].slice(-maxLogLines) };
       break;
     case "node_succeeded":
-      next = { ...n, status: "succeeded" };
+      next = { ...n, status: "succeeded", costUSD: n.costUSD + (e.data?.cost_usd ?? 0) };
       break;
     case "node_failed":
       next = {
@@ -66,6 +69,7 @@ export function apply(run: RunView | undefined, e: FactoryEvent): RunView | unde
         lastError: e.data.error,
         taskFailures: n.taskFailures + (e.data.class === "task" ? 1 : 0),
         infraFailures: n.infraFailures + (e.data.class === "infra" ? 1 : 0),
+        costUSD: n.costUSD + (e.data.cost_usd ?? 0),
         logs: [...n.logs, `✗ ${failureKind(e.data.class)} failure: ${e.data.error}${e.data.will_retry ? " (will retry)" : ""}`],
       };
       break;
@@ -80,7 +84,8 @@ export function apply(run: RunView | undefined, e: FactoryEvent): RunView | unde
     default:
       return run;
   }
-  return { ...run, nodes: { ...run.nodes, [e.node]: next } };
+  const spent = next.costUSD - n.costUSD;
+  return { ...run, costUSD: run.costUSD + spent, nodes: { ...run.nodes, [e.node]: next } };
 }
 
 // layout puts each node in the column of its longest dependency chain.

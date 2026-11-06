@@ -1,0 +1,259 @@
+package executor
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"slices"
+	"strings"
+	"time"
+	"uuid"
+
+	"github.com/brokentari/galvantula/internal/claude"
+	"github.com/brokentari/galvantula/internal/graph"
+	"github.com/brokentari/galvantula/internal/guardrails"
+	"github.com/brokentari/galvantula/internal/sandbox"
+	"github.com/brokentari/galvantula/internal/workspace"
+	"github.com/brokentari/galvantula/standards"
+)
+
+// Claude runs agent nodes with Claude Code inside a sandbox, and tool nodes
+// with Go code. Each run gets a folder under Root:
+//
+//	repo/            the product; main holds merged work
+//	nodes/<id>/      a worktree per agent node
+//	home/<id>/       the agent's HOME inside the sandbox
+//	sessions/<id>    the agent's last session id, for resuming
+type Claude struct {
+	Root  string
+	Rails guardrails.Guardrails
+	Spec  string
+	// Auth holds the credential the sandboxed agent uses:
+	// CLAUDE_CODE_OAUTH_TOKEN=... or ANTHROPIC_API_KEY=...
+	Auth string
+}
+
+const brief = `Build the program that spec.md describes, in this directory. AGENTS.md, which is part of your instructions, holds the rules for the code and its prose.
+
+- Write the code and its tests. Use only the standard library.
+- Do not change or delete a file that was here when you started: AGENTS.md, CLAUDE.md, spec.md, go.mod and .factory/. The check fails if you do.
+- Before you finish, make all of these pass: gofmt -l . (prints nothing), go vet ./..., go fix -diff ./... (prints nothing), go build ./... and go test ./...
+- Write NOTES.md: in a few lines, what you built and each assumption you made where the spec is unclear.`
+
+var tools = []string{"Read", "Write", "Edit", "Glob", "Grep", "Bash"}
+
+var allow = []string{"Bash(go build *)", "Bash(go test *)", "Bash(go vet *)", "Bash(go fix *)",
+	"Bash(go run *)", "Bash(go doc *)", "Bash(gofmt *)"}
+
+func (c Claude) Run(ctx context.Context, t Task, log func(string)) (Result, error) {
+	repo, err := workspace.Open(filepath.Join(c.Root, t.Run, "repo"))
+	if err != nil {
+		return Result{}, &InfraError{Err: err}
+	}
+	switch {
+	case t.Node.Kind == graph.Tool && t.Node.ID == "standards":
+		return Result{}, c.writeStandards(repo, log)
+	case t.Node.Kind == graph.Agent:
+		return c.agent(ctx, repo, t, log)
+	}
+	return Result{}, fmt.Errorf("the claude executor cannot run %s node %q yet", t.Node.Kind, t.Node.ID)
+}
+
+// writeStandards puts the rules, the spec and go.mod on main. Every agent
+// starts from them, and the check keeps them unchanged.
+func (c Claude) writeStandards(repo workspace.Repo, log func(string)) error {
+	block, err := standards.Render(c.Rails.Go.Version)
+	if err != nil {
+		return err
+	}
+	lock, err := standards.Lock()
+	if err != nil {
+		return err
+	}
+	review, err := standards.Review()
+	if err != nil {
+		return err
+	}
+	files := map[string]string{
+		"AGENTS.md":                    block,
+		"CLAUDE.md":                    "@AGENTS.md\n",
+		"spec.md":                      c.Spec,
+		"go.mod":                       fmt.Sprintf("module product\n\ngo %s\n", c.Rails.Go.Version),
+		".factory/standards/lock.json": string(lock),
+		".factory/standards/review.md": review,
+	}
+	for path, data := range files {
+		full := filepath.Join(repo.Dir, path)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(full, []byte(data), 0o644); err != nil {
+			return err
+		}
+		log("write " + path)
+	}
+	_, err = repo.CommitAll(repo.Dir, "standards")
+	return err
+}
+
+func (c Claude) agent(ctx context.Context, repo workspace.Repo, t Task, log func(string)) (Result, error) {
+	run := filepath.Join(c.Root, t.Run)
+	wt, err := repo.Worktree(t.Node.ID)
+	if err != nil {
+		return Result{}, &InfraError{Err: err}
+	}
+	home := filepath.Join(run, "home", t.Node.ID)
+	sessions := filepath.Join(run, "sessions")
+	for _, dir := range []string{home, sessions, c.goCache(), c.goModCache()} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return Result{}, &InfraError{Err: err}
+		}
+	}
+	bin, err := claudeBin()
+	if err != nil {
+		return Result{}, &InfraError{Err: err}
+	}
+
+	role := c.Rails.Models.Implementer
+	bare := strings.HasPrefix(c.Auth, "ANTHROPIC_API_KEY=")
+	box := c.box(wt, home, []string{c.Auth, "DISABLE_AUTOUPDATER=1"})
+	box.RO = append(box.RO, bin)
+	opts := claude.Options{
+		Dir:          wt,
+		Model:        role.Model,
+		Effort:       role.Effort,
+		SystemFile:   filepath.Join(wt, "AGENTS.md"),
+		Tools:        tools,
+		Allow:        allow,
+		Mode:         "acceptEdits",
+		MaxBudgetUSD: c.Rails.Budget.NodeUSD,
+		Bin:          bin,
+		Bare:         &bare,
+		Exec: func(ctx context.Context, name string, args ...string) *exec.Cmd {
+			return sandbox.Command(ctx, box, name, args...)
+		},
+		Log: log,
+	}
+
+	// The first retry continues the session, which already knows the code.
+	// Later attempts start over, to get away from an approach that failed.
+	session := filepath.Join(sessions, t.Node.ID)
+	if id, err := os.ReadFile(session); t.Resume && err == nil {
+		opts.Resume = string(id)
+		opts.Prompt = "The factory's check failed:\n\n" + t.Feedback + "\n\nFix the code so the check passes."
+		log("resume the last session")
+	} else {
+		if err := repo.Reset(wt); err != nil {
+			return Result{}, &InfraError{Err: err}
+		}
+		opts.SessionID = uuid.New().String()
+		if err := os.WriteFile(session, []byte(opts.SessionID), 0o644); err != nil {
+			return Result{}, &InfraError{Err: err}
+		}
+		opts.Prompt = brief
+		if t.Feedback != "" {
+			opts.Prompt += "\n\nAn earlier attempt failed. The factory reported:\n\n" + t.Feedback
+		}
+	}
+
+	limit := time.Duration(c.Rails.Budget.NodeMinutes) * time.Minute
+	attemptCtx, cancel := context.WithTimeout(ctx, limit)
+	defer cancel()
+	res, err := claude.Run(attemptCtx, opts)
+	spent := Result{CostUSD: res.CostUSD}
+	switch {
+	case ctx.Err() != nil:
+		return spent, err // the runner is stopping
+	case errors.Is(err, context.DeadlineExceeded):
+		return spent, fmt.Errorf("the agent ran past %s", limit)
+	case errors.Is(err, claude.ErrNoResult):
+		return spent, &InfraError{Err: err}
+	case err != nil:
+		return spent, err
+	}
+
+	log("check")
+	if err := c.check(ctx, repo, wt); err != nil {
+		return spent, fmt.Errorf("check failed:\n%w", err)
+	}
+	if _, err := repo.CommitAll(wt, fmt.Sprintf("%s: attempt %d", t.Node.ID, t.Attempt)); err != nil {
+		return spent, &InfraError{Err: err}
+	}
+	if err := repo.Merge(t.Node.ID); err != nil {
+		return spent, &InfraError{Err: err}
+	}
+	log("merged into main")
+	return spent, nil
+}
+
+// check runs the factory's checks on a worktree. Build and test run the
+// agent's code, so they run in the sandbox too, without any credential.
+func (c Claude) check(ctx context.Context, repo workspace.Repo, wt string) error {
+	var errs []error
+	changed, err := repo.Changed(wt)
+	if err != nil {
+		return &InfraError{Err: err}
+	}
+	if len(changed) > 0 {
+		errs = append(errs, fmt.Errorf("these files must not change: %s", strings.Join(changed, ", ")))
+	}
+	home, err := os.MkdirTemp("", "check-home")
+	if err != nil {
+		return &InfraError{Err: err}
+	}
+	defer os.RemoveAll(home)
+	box := c.box(wt, home, nil)
+	for _, step := range [][]string{
+		{"gofmt", "-l", "."},
+		{"go", "vet", "./..."},
+		{"go", "fix", "-diff", "./..."},            // exits non-zero when it has a change to suggest
+		{"go", "build", "-o", os.DevNull, "./..."}, // a single main package would otherwise leave its binary here
+		{"go", "test", "-count=1", "./..."},
+	} {
+		out, err := sandbox.Command(ctx, box, step[0], step[1:]...).CombinedOutput()
+		quiet := step[0] == "gofmt" // gofmt lists files to fix and still exits 0
+		if err != nil || (quiet && len(out) > 0) {
+			errs = append(errs, fmt.Errorf("%s:\n%s", strings.Join(step, " "), tail(string(out), 40)))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// box is the sandbox for one worktree, with the Go settings the factory needs.
+func (c Claude) box(wt, home string, env []string) sandbox.Spec {
+	return sandbox.Spec{
+		Dir:  wt,
+		RW:   []string{wt, home, c.goCache(), c.goModCache()},
+		Home: home,
+		Env: slices.Concat(env, []string{
+			"GOCACHE=" + c.goCache(),
+			"GOMODCACHE=" + c.goModCache(),
+			"GOFLAGS=-mod=readonly -buildvcs=false",
+			"GOPROXY=off",
+			"GOTOOLCHAIN=local",
+			"GOTELEMETRY=off",
+		}),
+	}
+}
+
+// The factory keeps its own Go caches, so agent code never writes to the user's.
+func (c Claude) goCache() string    { return filepath.Join(c.Root, ".cache", "go-build") }
+func (c Claude) goModCache() string { return filepath.Join(c.Root, ".cache", "go-mod") }
+
+// claudeBin finds the real claude executable. Updates change its path, so
+// look it up on each attempt.
+func claudeBin() (string, error) {
+	p, err := exec.LookPath("claude")
+	if err != nil {
+		return "", err
+	}
+	return filepath.EvalSymlinks(p)
+}
+
+func tail(s string, lines int) string {
+	parts := strings.Split(strings.TrimSpace(s), "\n")
+	return strings.Join(parts[max(len(parts)-lines, 0):], "\n")
+}

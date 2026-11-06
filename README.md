@@ -5,10 +5,9 @@ comes out. A Go runtime owns a graph of work. Claude Code runs each agent
 node. A React UI shows each run live. The full plan is in
 [Software Factory Plan.html](Software%20Factory%20Plan.html).
 
-**Status: phase 0 (the first version) is done.** Its standards review ended
-with "Ship." (`docs/reviews/phase-0.md`). Two nice-to-have items from that
-review carry into phase 1. There is no LLM in the runtime yet. A fake
-executor plays a script, so you can watch the runtime and the UI work.
+**Status: phase 1 (one sandboxed agent) is built and waits for its first
+real eval runs.** Phase 0 passed its standards review
+(`docs/reviews/phase-0.md`).
 
 ## Run the demo
 
@@ -35,6 +34,31 @@ that finished does not run again.
 
 Use **Replay** and the slider to step through any run, event by event.
 
+## Run a real agent
+
+Agents run Claude Code inside a bubblewrap sandbox, which cannot see your
+home folder, so they need their own credential. Create one with
+`claude setup-token` (it uses your Claude subscription), or use an API key:
+
+```
+export CLAUDE_CODE_OAUTH_TOKEN=...   # or ANTHROPIC_API_KEY=...
+go run ./cmd/factory serve
+go run ./cmd/factory start -spec evals/wordfreq/spec.md graphs/phase1.yaml
+```
+
+Each run's product is a git repo in `runs/<run>/repo`. The agent works in
+`runs/<run>/nodes/<node>`; the runtime commits and merges its work after the
+check passes. `guardrails.yaml` sets each attempt's spending and time limits.
+
+To score the factory, run the evals against a running server:
+
+```
+go run ./cmd/factory eval -n 10 evals/wordfreq evals/todo evals/csvq
+```
+
+It records one line per run in `evals/results/<date>.jsonl` and prints the
+pass rate, median cost and median time for each eval.
+
 ## How the parts connect
 
 | path | what it is |
@@ -44,7 +68,8 @@ Use **Replay** and the slider to step through any run, event by event.
 | `internal/graph` | graph types, validation, and filling a slot with a plan's nodes |
 | `internal/event` | event types, the SQLite event log, and the code that rebuilds a run's state from its events |
 | `internal/runner` | the runtime: scheduling, worker limit, retries, gates, resume |
-| `internal/executor` | the executor interface and the fake executor |
+| `internal/executor` | the executor interface, the fake executor, and the Claude Code executor with its check |
+| `internal/sandbox`, `internal/workspace` | the bubblewrap sandbox; the product repo and its worktrees |
 | `internal/server` | HTTP API and the server-sent event stream |
 | `cmd/factory` | `serve`, `start`, `validate` |
 | `cmd/gen-ts` | writes `ui/src/gen/events.ts` from the Go types |

@@ -15,21 +15,35 @@ import (
 
 // Role is the model one kind of node runs on.
 type Role struct {
-	Model  string `yaml:"model"`
-	Effort string `yaml:"effort"`
+	Model  string `yaml:"model" json:"model"`
+	Effort string `yaml:"effort" json:"effort"`
 }
 
 type Guardrails struct {
-	Go struct {
-		Version string `yaml:"version"`
-	} `yaml:"go"`
-	Models struct {
-		Architect   Role `yaml:"architect"`
-		Planner     Role `yaml:"planner"`
-		Implementer Role `yaml:"implementer"`
-		Reviewer    Role `yaml:"reviewer"`
-		EvalAuthor  Role `yaml:"eval_author"`
-	} `yaml:"models"`
+	Go     GoTarget `yaml:"go" json:"go"`
+	Budget Budget   `yaml:"budget" json:"budget"`
+	Models Models   `yaml:"models" json:"models"`
+}
+
+// GoTarget is the Go version every product's go.mod names.
+type GoTarget struct {
+	Version string `yaml:"version" json:"version"`
+}
+
+// Budget limits spending and time.
+type Budget struct {
+	NodeUSD     float64 `yaml:"node_usd" json:"node_usd"`
+	RunUSD      float64 `yaml:"run_usd" json:"run_usd"`
+	NodeMinutes int     `yaml:"node_minutes" json:"node_minutes"`
+}
+
+// Models names the model for each role.
+type Models struct {
+	Architect   Role `yaml:"architect" json:"architect"`
+	Planner     Role `yaml:"planner" json:"planner"`
+	Implementer Role `yaml:"implementer" json:"implementer"`
+	Reviewer    Role `yaml:"reviewer" json:"reviewer"`
+	EvalAuthor  Role `yaml:"eval_author" json:"eval_author"`
 }
 
 var (
@@ -60,6 +74,9 @@ func (g Guardrails) Validate() error {
 	var errs []error
 	if !goVersion.MatchString(g.Go.Version) {
 		errs = append(errs, fmt.Errorf("go.version %q must look like 1.27", g.Go.Version))
+	}
+	if b := g.Budget; b.NodeUSD <= 0 || b.RunUSD < b.NodeUSD || b.NodeMinutes <= 0 {
+		errs = append(errs, fmt.Errorf("budget: node_usd and node_minutes must be positive, and run_usd at least node_usd"))
 	}
 	m := g.Models
 	roles := []struct {

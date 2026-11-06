@@ -1,0 +1,13 @@
+# Phase 1: one agent builds the spec. The standards node first puts the
+# rules, the spec and go.mod on main; the agent's check keeps them unchanged.
+name: phase1
+nodes:
+  - id: standards
+    title: Write AGENTS.md, spec.md and go.mod
+    kind: tool
+
+  - id: build
+    title: Build the spec and pass the check
+    kind: agent
+    deps: [standards]
+    retries: 2

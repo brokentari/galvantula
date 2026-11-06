@@ -20,12 +20,18 @@ type Task struct {
 	Run     string
 	Node    graph.Node
 	Attempt int // starts at 1
+	// Resume asks the executor to continue the last attempt's session
+	// instead of starting again from a clean worktree.
+	Resume bool
+	// Feedback is why the last attempt failed, if there was one.
+	Feedback string
 }
 
-// Result is what a successful attempt produced.
+// Result is what an attempt produced. CostUSD is set even when it failed.
 type Result struct {
 	// Nodes is the subgraph a plan node emitted. Other kinds leave it empty.
-	Nodes []graph.Node
+	Nodes   []graph.Node
+	CostUSD float64
 }
 
 // Executor runs tasks. log sends one line to the run's event log.
@@ -58,7 +64,8 @@ type Step struct {
 	Logs         []string      `yaml:"logs"`
 	FailAttempts int           `yaml:"fail_attempts"` // the first N attempts fail
 	Error        string        `yaml:"error"`
-	Emit         []graph.Node  `yaml:"emit"` // for plan nodes
+	Emit         []graph.Node  `yaml:"emit"`     // for plan nodes
+	CostUSD      float64       `yaml:"cost_usd"` // what each attempt reports it spent
 }
 
 // ParseScript reads a fake script from YAML. Unknown fields are errors.
@@ -96,9 +103,9 @@ func (f Fake) Run(ctx context.Context, t Task, log func(string)) (Result, error)
 		return Result{}, err
 	}
 	if t.Attempt <= step.FailAttempts {
-		return Result{}, errors.New(cmp.Or(step.Error, "fake failure"))
+		return Result{CostUSD: step.CostUSD}, errors.New(cmp.Or(step.Error, "fake failure"))
 	}
-	return Result{Nodes: step.Emit}, nil
+	return Result{Nodes: step.Emit, CostUSD: step.CostUSD}, nil
 }
 
 func sleep(ctx context.Context, d time.Duration) error {

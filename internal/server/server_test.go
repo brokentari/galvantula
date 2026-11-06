@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/brokentari/galvantula/internal/event"
+	"github.com/brokentari/galvantula/internal/guardrails"
 	"github.com/brokentari/galvantula/internal/runner"
 )
 
@@ -45,11 +46,12 @@ func TestStreamAndDecide(t *testing.T) {
 	}
 	defer store.Close()
 	r := runner.New(t.Context(), store, 3)
-	srv := httptest.NewServer(New(store, r, ""))
+	srv := httptest.NewServer(New(store, r, guardrails.Guardrails{}, ""))
 	defer srv.Close()
 
 	body, _ := json.Marshal(StartRequest{
 		Graph:      "name: g\nnodes:\n  - {id: a, kind: tool}\n  - {id: ok, kind: gate, deps: [a]}\n  - {id: b, kind: tool, deps: [ok]}",
+		Executor:   "fake",
 		FakeScript: "default: {duration: 1ms}",
 	})
 	resp, err := http.Post(srv.URL+"/api/runs", "application/json", bytes.NewReader(body))
@@ -114,7 +116,7 @@ func TestRejectsUnsafeRequests(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	srv := httptest.NewServer(New(store, runner.New(t.Context(), store, 1), ""))
+	srv := httptest.NewServer(New(store, runner.New(t.Context(), store, 1), guardrails.Guardrails{}, ""))
 	defer srv.Close()
 
 	tests := []struct {

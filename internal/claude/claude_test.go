@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -25,8 +26,8 @@ func TestRunResults(t *testing.T) {
 		name, script string
 		wantErr      string // empty: no error
 	}{
-		{"success", `echo '{"subtype":"success","is_error":false,"result":"done","total_cost_usd":0.5,"session_id":"s1"}'`, ""},
-		{"model error", `echo '{"subtype":"error_max_turns","is_error":true,"result":"boom"}'`, "error_max_turns: boom"},
+		{"success", `echo '{"type":"system","subtype":"init"}'; echo '{"type":"result","subtype":"success","is_error":false,"result":"done","total_cost_usd":0.5,"session_id":"s1"}'`, ""},
+		{"model error", `echo '{"type":"result","subtype":"error_max_turns","is_error":true,"result":"boom"}'`, "error_max_turns: boom"},
 		{"not JSON", `echo 'claude: bad flag' >&2; exit 2`, "claude: bad flag"},
 	}
 	for _, tt := range tests {
@@ -49,7 +50,7 @@ func TestRunIsolation(t *testing.T) {
 	for key, want := range map[string]string{"": "--safe-mode", "sk-test": "--bare"} {
 		t.Setenv("ANTHROPIC_API_KEY", key)
 		args := filepath.Join(t.TempDir(), "args")
-		fakeClaude(t, `echo "$@" > `+args+`; echo '{"is_error":false,"result":"ok"}'`)
+		fakeClaude(t, `echo "$@" > `+args+`; echo '{"type":"result","is_error":false,"result":"ok"}'`)
 		if _, err := Run(t.Context(), Options{Dir: t.TempDir(), Prompt: "x", Model: "m", Effort: "low", Mode: "dontAsk"}); err != nil {
 			t.Fatal(err)
 		}
@@ -57,6 +58,26 @@ func TestRunIsolation(t *testing.T) {
 		if !strings.Contains(string(got), want) {
 			t.Errorf("with key %q, args %q do not contain %s", key, got, want)
 		}
+	}
+}
+
+func TestRunLogsSteps(t *testing.T) {
+	fakeClaude(t, `cat <<'EOS'
+{"type":"assistant","message":{"content":[{"type":"text","text":"I will   write\nthe file."},{"type":"tool_use","name":"Write","input":{"file_path":"main.go","content":"package main"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","content":"ok"}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"go test ./..."}}]}}
+{"type":"result","is_error":false,"result":"done"}
+EOS
+`)
+	var lines []string
+	_, err := Run(t.Context(), Options{Dir: t.TempDir(), Prompt: "x", Model: "m", Effort: "low", Mode: "dontAsk",
+		Log: func(l string) { lines = append(lines, l) }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"I will write the file.", "Write: main.go", "Bash: go test ./..."}
+	if !slices.Equal(lines, want) {
+		t.Errorf("log = %q, want %q", lines, want)
 	}
 }
 

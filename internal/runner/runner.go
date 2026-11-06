@@ -12,16 +12,24 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/brokentari/galvantula/internal/event"
 	"github.com/brokentari/galvantula/internal/executor"
 	"github.com/brokentari/galvantula/internal/graph"
+	"github.com/brokentari/galvantula/internal/guardrails"
 )
 
-// maxInfraFailures stops a node that keeps failing for reasons outside it.
-const maxInfraFailures = 5
+const (
+	// maxInfraFailures stops a node that keeps failing for reasons outside it.
+	maxInfraFailures = 5
+	// infraBackoff is the wait before the second retry after infra failures.
+	// It doubles each time, up to maxBackoff, so a rate limit can pass.
+	infraBackoff = 5 * time.Second
+	maxBackoff   = 2 * time.Minute
+)
 
-// ErrInvalid wraps the errors Start returns for a bad graph or fake script.
+// ErrInvalid wraps the errors Start returns for a run that cannot start.
 var ErrInvalid = errors.New("invalid run")
 
 // Runner drives runs. Each run has one goroutine that owns its state.
@@ -32,6 +40,11 @@ type Runner struct {
 
 	// Executor builds the executor for a run from its state. Tests replace it.
 	Executor func(st *event.State) (executor.Executor, error)
+	// Root holds each run's product repo and worktrees.
+	Root string
+	// Auth is the credential for sandboxed agents:
+	// CLAUDE_CODE_OAUTH_TOKEN=... or ANTHROPIC_API_KEY=...
+	Auth string
 
 	wg   sync.WaitGroup
 	mu   sync.Mutex
@@ -60,36 +73,72 @@ type outcome struct {
 // New returns a runner that stops driving runs when ctx ends.
 // workers limits how many nodes of one run execute at the same time.
 func New(ctx context.Context, store *event.Store, workers int) *Runner {
-	return &Runner{
-		ctx:      ctx,
-		store:    store,
-		workers:  max(workers, 1),
-		Executor: fromState,
-		runs:     map[string]*active{},
+	r := &Runner{
+		ctx:     ctx,
+		store:   store,
+		workers: max(workers, 1),
+		Root:    "runs",
+		runs:    map[string]*active{},
 	}
+	r.Executor = r.fromState
+	return r
 }
 
-func fromState(st *event.State) (executor.Executor, error) {
-	if st.Executor != "fake" {
-		return nil, fmt.Errorf("unknown executor %q", st.Executor)
+func (r *Runner) fromState(st *event.State) (executor.Executor, error) {
+	switch st.Executor {
+	case "fake":
+		s, err := executor.ParseScript([]byte(st.FakeScript))
+		if err != nil {
+			return nil, err
+		}
+		return executor.Fake{Script: s}, nil
+	case "claude":
+		if r.Auth == "" {
+			return nil, errNoAuth
+		}
+		return executor.Claude{Root: r.Root, Rails: st.Rails, Spec: st.Spec, Auth: r.Auth}, nil
 	}
-	s, err := executor.ParseScript([]byte(st.FakeScript))
-	if err != nil {
-		return nil, err
-	}
-	return executor.Fake{Script: s}, nil
+	return nil, fmt.Errorf("unknown executor %q", st.Executor)
 }
 
-// Start records a new run of g with the fake executor and starts driving it.
-func (r *Runner) Start(g graph.Graph, fakeScript string) (string, error) {
-	if err := g.Validate(); err != nil {
-		return "", fmt.Errorf("%w: %w", ErrInvalid, err)
+var errNoAuth = errors.New("no credential for agents: set CLAUDE_CODE_OAUTH_TOKEN (from claude setup-token) or ANTHROPIC_API_KEY before factory serve")
+
+// Run says how to start a run. Executor is "fake", which plays FakeScript,
+// or "claude", which builds Spec under Rails.
+type Run struct {
+	Graph      graph.Graph
+	Executor   string
+	FakeScript string
+	Spec       string
+	Rails      guardrails.Guardrails
+}
+
+// Start records a new run and starts driving it.
+func (r *Runner) Start(run Run) (string, error) {
+	invalid := func(err error) (string, error) { return "", fmt.Errorf("%w: %w", ErrInvalid, err) }
+	if err := run.Graph.Validate(); err != nil {
+		return invalid(err)
 	}
-	if _, err := executor.ParseScript([]byte(fakeScript)); err != nil {
-		return "", fmt.Errorf("%w: %w", ErrInvalid, err)
+	switch run.Executor {
+	case "fake":
+		if _, err := executor.ParseScript([]byte(run.FakeScript)); err != nil {
+			return invalid(err)
+		}
+	case "claude":
+		if strings.TrimSpace(run.Spec) == "" {
+			return invalid(errors.New("the claude executor needs a spec"))
+		}
+		if err := run.Rails.Validate(); err != nil {
+			return invalid(err)
+		}
+		if r.Auth == "" {
+			return invalid(errNoAuth)
+		}
+	default:
+		return invalid(fmt.Errorf("unknown executor %q", run.Executor))
 	}
 	id := "r-" + strings.ToLower(rand.Text()[:10])
-	data := event.RunCreatedData{Graph: g, Executor: "fake", FakeScript: fakeScript}
+	data := event.RunCreatedData{Graph: run.Graph, Executor: run.Executor, FakeScript: run.FakeScript, Spec: run.Spec, Guardrails: run.Rails}
 	if _, err := r.store.Append(event.New(id, event.RunCreated, "", 0, data)); err != nil {
 		return "", err
 	}
@@ -179,7 +228,7 @@ func (r *Runner) drive(id string, a *active) error {
 	for _, n := range st.Graph.Nodes {
 		if ns := st.Nodes[n.ID]; ns.Status == event.Running {
 			err := &executor.InfraError{Err: errors.New("interrupted: the runtime restarted")}
-			if err := r.fail(st, emit, n, ns.Attempt, err); err != nil {
+			if err := r.fail(st, emit, n, ns.Attempt, err, 0); err != nil {
 				return err
 			}
 		}
@@ -189,8 +238,8 @@ func (r *Runner) drive(id string, a *active) error {
 	results := make(chan outcome, r.workers)
 	running := 0
 	for st.Status == event.RunRunning {
-		failed := firstFailed(st)
-		if failed == "" {
+		stop := stopReason(st)
+		if stop == "" {
 			for _, n := range ready(st) {
 				switch n.Kind {
 				case graph.Gate:
@@ -209,7 +258,18 @@ func (r *Runner) drive(id string, a *active) error {
 				if running == r.workers {
 					continue // gates later in the list still need to wait
 				}
-				attempt := st.Nodes[n.ID].Attempt + 1
+				ns := st.Nodes[n.ID]
+				task := executor.Task{Run: id, Node: n, Attempt: ns.Attempt + 1}
+				if ns.Attempt > 0 {
+					task.Feedback = ns.LastError
+					task.Resume = task.Attempt == 2 && ns.LastClass == event.Task
+				}
+				// The first infra retry starts at once: a restart is not a rate limit.
+				var wait time.Duration
+				if ns.LastClass == event.Infra && ns.InfraFailures > 1 {
+					wait = min(infraBackoff<<(ns.InfraFailures-2), maxBackoff)
+				}
+				attempt := task.Attempt
 				if err := emit(event.New(id, event.NodeStarted, n.ID, attempt, nil)); err != nil {
 					return err
 				}
@@ -222,14 +282,18 @@ func (r *Runner) drive(id string, a *active) error {
 							slog.Warn("drop log line", "run", id, "node", n.ID, "err", err)
 						}
 					}
-					res, err := exec.Run(r.ctx, executor.Task{Run: id, Node: n, Attempt: attempt}, log)
+					var res executor.Result
+					err := sleep(r.ctx, wait)
+					if err == nil {
+						res, err = exec.Run(r.ctx, task, log)
+					}
 					results <- outcome{node: n, attempt: attempt, res: res, err: err}
 				})
 			}
 		}
 
 		if running == 0 {
-			if status, reason, done := finished(st, failed); done {
+			if status, reason, done := finished(st, stop); done {
 				return emit(event.New(id, event.RunFinished, "", 0,
 					event.RunFinishedData{Status: status, Reason: reason}))
 			}
@@ -259,24 +323,23 @@ func (r *Runner) complete(st *event.State, emit func(event.Event) error, o outco
 		g, err := fillSlot(st.Graph, o.node.ID, o.res.Nodes)
 		if err == nil {
 			// This one event also marks the plan node succeeded.
-			d := event.GraphUpdatedData{Graph: g, Reason: fmt.Sprintf("%s emitted %d nodes", o.node.ID, len(o.res.Nodes))}
+			d := event.GraphUpdatedData{Graph: g, Reason: fmt.Sprintf("%s emitted %d nodes", o.node.ID, len(o.res.Nodes)), CostUSD: o.res.CostUSD}
 			return emit(event.New(st.Run, event.GraphUpdated, o.node.ID, o.attempt, d))
 		}
 		o.err = fmt.Errorf("plan output rejected: %w", err)
 	}
 	if o.err == nil {
-		return emit(event.New(st.Run, event.NodeSucceeded, o.node.ID, o.attempt, nil))
+		return emit(event.New(st.Run, event.NodeSucceeded, o.node.ID, o.attempt, event.NodeSucceededData{CostUSD: o.res.CostUSD}))
 	}
-	return r.fail(st, emit, o.node, o.attempt, o.err)
+	return r.fail(st, emit, o.node, o.attempt, o.err, o.res.CostUSD)
 }
 
 // fail records a failed attempt and decides whether the node will retry.
-func (r *Runner) fail(st *event.State, emit func(event.Event) error, n graph.Node, attempt int, err error) error {
+func (r *Runner) fail(st *event.State, emit func(event.Event) error, n graph.Node, attempt int, err error, cost float64) error {
 	ns := st.Nodes[n.ID]
-	d := event.NodeFailedData{Error: err.Error(), Class: event.Task}
+	d := event.NodeFailedData{Error: err.Error(), Class: event.Task, CostUSD: cost}
 	if executor.IsInfra(err) {
 		d.Class = event.Infra
-		// shortcut: infra retries start again at once; add backoff when real executors hit rate limits (phase 1).
 		d.WillRetry = ns.InfraFailures+1 < maxInfraFailures
 	} else {
 		d.WillRetry = ns.TaskFailures+1 <= n.Retries
@@ -314,18 +377,36 @@ func ready(st *event.State) []graph.Node {
 	return out
 }
 
-func firstFailed(st *event.State) string {
-	i := slices.IndexFunc(st.Graph.Nodes, func(n graph.Node) bool { return st.Nodes[n.ID].Status == event.Failed })
-	if i < 0 {
-		return ""
+// stopReason says why the run must start no more nodes, or "" if it may.
+func stopReason(st *event.State) string {
+	if i := slices.IndexFunc(st.Graph.Nodes, func(n graph.Node) bool { return st.Nodes[n.ID].Status == event.Failed }); i >= 0 {
+		id := st.Graph.Nodes[i].ID
+		return fmt.Sprintf("node %s failed: %s", id, st.Nodes[id].LastError)
 	}
-	return st.Graph.Nodes[i].ID
+	if budget := st.Rails.Budget.RunUSD; budget > 0 && st.CostUSD >= budget {
+		return fmt.Sprintf("the run spent $%.2f of its $%.2f budget", st.CostUSD, budget)
+	}
+	return ""
+}
+
+func sleep(ctx context.Context, d time.Duration) error {
+	if d <= 0 {
+		return nil
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-t.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // finished decides the run's outcome. Call it only when nothing is running.
-func finished(st *event.State, failed string) (event.RunStatus, string, bool) {
-	if failed != "" {
-		return event.RunFailed, fmt.Sprintf("node %s failed: %s", failed, st.Nodes[failed].LastError), true
+func finished(st *event.State, stop string) (event.RunStatus, string, bool) {
+	if stop != "" {
+		return event.RunFailed, stop, true
 	}
 	var stuck []string
 	for _, n := range st.Graph.Nodes {
