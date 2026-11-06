@@ -5,11 +5,15 @@ package server
 import (
 	"cmp"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"log/slog"
 	"mime"
+	"net"
 	"net/http"
+	"net/netip"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/brokentari/galvantula/internal/event"
@@ -52,7 +56,29 @@ func New(store *event.Store, r *runner.Runner, uiDir string) http.Handler {
 	if uiDir != "" {
 		mux.Handle("/", http.FileServer(http.Dir(uiDir)))
 	}
-	return mux
+	return localOnly(mux)
+}
+
+// localOnly refuses requests whose Host is not this machine. The API has no
+// login, so a web page must not reach it by pointing its own domain at
+// 127.0.0.1 (DNS rebinding).
+func localOnly(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		host, _, err := net.SplitHostPort(r.Host)
+		if err != nil {
+			host = r.Host // no port
+		}
+		if host != "localhost" && !isLoopback(host) {
+			http.Error(w, "this server answers only on localhost", http.StatusForbidden)
+			return
+		}
+		h.ServeHTTP(w, r)
+	})
+}
+
+func isLoopback(host string) bool {
+	ip, err := netip.ParseAddr(strings.Trim(host, "[]"))
+	return err == nil && ip.IsLoopback()
 }
 
 func (s *server) listRuns(w http.ResponseWriter, _ *http.Request) {
@@ -75,8 +101,12 @@ func (s *server) startRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id, err := s.runner.Start(g, req.FakeScript)
-	if err != nil {
+	switch {
+	case errors.Is(err, runner.ErrInvalid):
 		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+		return
+	case err != nil:
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]string{"id": id})

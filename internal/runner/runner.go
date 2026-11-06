@@ -21,6 +21,9 @@ import (
 // maxInfraFailures stops a node that keeps failing for reasons outside it.
 const maxInfraFailures = 5
 
+// ErrInvalid wraps the errors Start returns for a bad graph or fake script.
+var ErrInvalid = errors.New("invalid run")
+
 // Runner drives runs. Each run has one goroutine that owns its state.
 type Runner struct {
 	ctx     context.Context
@@ -80,10 +83,10 @@ func fromState(st *event.State) (executor.Executor, error) {
 // Start records a new run of g with the fake executor and starts driving it.
 func (r *Runner) Start(g graph.Graph, fakeScript string) (string, error) {
 	if err := g.Validate(); err != nil {
-		return "", err
+		return "", fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 	if _, err := executor.ParseScript([]byte(fakeScript)); err != nil {
-		return "", err
+		return "", fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 	id := "r-" + strings.ToLower(rand.Text()[:10])
 	data := event.RunCreatedData{Graph: g, Executor: "fake", FakeScript: fakeScript}
@@ -312,12 +315,11 @@ func ready(st *event.State) []graph.Node {
 }
 
 func firstFailed(st *event.State) string {
-	for _, n := range st.Graph.Nodes {
-		if st.Nodes[n.ID].Status == event.Failed {
-			return n.ID
-		}
+	i := slices.IndexFunc(st.Graph.Nodes, func(n graph.Node) bool { return st.Nodes[n.ID].Status == event.Failed })
+	if i < 0 {
+		return ""
 	}
-	return ""
+	return st.Graph.Nodes[i].ID
 }
 
 // finished decides the run's outcome. Call it only when nothing is running.

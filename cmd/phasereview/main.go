@@ -76,8 +76,8 @@ func review(phase, base, rails string) error {
 		return err
 	}
 	// The diff covers commits, but the reviewer reads the working tree, so
-	// the two must match.
-	if dirty, err := git("status", "--porcelain"); err != nil || dirty != "" {
+	// the two must match. Review reports are left out of both.
+	if dirty, err := git("status", "--porcelain", "--", ".", ":(exclude)docs/reviews"); err != nil || dirty != "" {
 		return errors.Join(err, errors.New("commit your changes first, so the reviewer sees what the diff says"))
 	}
 	head, err := git("rev-parse", "--short", "HEAD")

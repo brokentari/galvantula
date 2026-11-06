@@ -6,6 +6,7 @@ package evalkit
 import (
 	"bytes"
 	"cmp"
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // Build compiles ./cmd/<name> from the product under test into dir.
@@ -52,16 +54,24 @@ type Result struct {
 	Code           int
 }
 
+// timeout fails one run of a product that hangs, instead of the whole package.
+const timeout = 30 * time.Second
+
 // Run runs bin with args in dir (the test's temp dir if empty), feeding stdin.
 func Run(t *testing.T, bin, dir, stdin string, args ...string) Result {
 	t.Helper()
-	cmd := exec.Command(bin, args...)
+	ctx, cancel := context.WithTimeout(t.Context(), timeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, bin, args...)
 	cmd.Dir = cmp.Or(dir, t.TempDir())
 	cmd.Stdin = strings.NewReader(stdin)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	err := cmd.Run()
 	res := Result{Stdout: stdout.String(), Stderr: stderr.String()}
+	if ctx.Err() != nil {
+		t.Fatalf("run %s %q: no exit after %s", bin, args, timeout)
+	}
 	if exit, ok := errors.AsType[*exec.ExitError](err); ok {
 		res.Code = exit.ExitCode()
 	} else if err != nil {

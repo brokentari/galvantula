@@ -137,6 +137,19 @@ func TestRejectsUnsafeRequests(t *testing.T) {
 			}
 		})
 	}
+
+	// DNS rebinding: a page on another domain that resolves to 127.0.0.1.
+	req, _ := http.NewRequest("GET", srv.URL+"/api/runs", nil)
+	req.Host = "evil.example:7070"
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("request with Host evil.example: got %s, want 403", resp.Status)
+	}
+
 	if runs, _ := store.Runs(); len(runs) != 0 {
 		t.Errorf("a refused request started %d runs", len(runs))
 	}

@@ -34,7 +34,7 @@ verify fails / review must + should  → one bounded fix node, then re-verify
 fix still failing                    → planner rewrites the subgraph (≤ M), back to DAG approval
 ```
 
-You write the outer graph by hand, as a file. The standards node runs first and writes the same rules into every product, so the architect, the implementers, the fix node and the review all work from one file. The planner writes only the generated nodes, as JSON that the runtime validates before anything runs. Each task node is implemented, checked and merged on its own, so a failure points at one package. A dependent node starts from the integration branch after its dependencies merge, so it builds against real code. Retry edges have caps. Replanning is the last resort, and it always goes back to you.
+You write the outer graph by hand, as a file. The standards node runs first and writes the same rules into every product, so the architect, the implementers, the fix node and the review all work from one file. The planner writes only the generated nodes, as JSON that the runtime validates before anything runs. Each task node is implemented, checked and merged on its own, so a failure points at one package. A dependent node starts from the integration branch after its dependencies merge, so it builds against real code. Retry edges have caps. Replanning runs only after retries and the fix node fail, and it always goes back to you.
 
 ## Node kinds
 
@@ -153,7 +153,7 @@ Out:
 - `NOTES.md`: what it did and any assumptions, in a few lines
 - the `result` event: cost, turns, session id
 
-Raw transcripts go to disk for each attempt. They are never passed downstream.
+Raw transcripts go to disk for each attempt. They are never given to later nodes.
 
 ## Two ways to connect Claude Code
 
@@ -174,7 +174,7 @@ claude --bare -p "$(cat brief.md)" \
   --strict-mcp-config
 ```
 
-**Retries:** the first retry resumes the session with `--resume "$NODE_SESSION"` and the failing output, which is cheap because the context is already there. The second retry starts a new session, which escapes a bad approach.
+**Retries:** the first retry resumes the session with `--resume "$NODE_SESSION"` and the failing output, which is cheap because the context is already there. The second retry starts a new session, so the node can try a different approach.
 
 The planner uses `--json-schema`, so Claude Code checks the DAG's shape before the runtime's own validator runs. Each role's model and effort come from `guardrails.yaml`.
 
@@ -193,7 +193,7 @@ factory_logs(node_id)                → transcript
 
 The MCP server refuses every call when `FACTORY_RUN_ID` is set in its environment. This is a second guard against a worker calling the factory.
 
-Build this last. Once the runtime works, it is a thin layer.
+Build this last. Once the runtime works, it needs little code.
 
 ## Sandbox and runtime limits
 

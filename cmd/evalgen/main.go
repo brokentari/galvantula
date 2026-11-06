@@ -170,7 +170,13 @@ func generate(ctx context.Context, g guardrails.Guardrails, dir string, retries 
 		opts.MaxBudgetUSD = max(budget-p.CostUSD, 1)
 	}
 
-	if err := install(work, dir, name); err != nil {
+	runTests := func(dir string) error {
+		if out, err := goCmd(".", nil, "test", "-count=1", "./"+filepath.ToSlash(dir)+"/hidden/"); err != nil {
+			return fmt.Errorf("%w\n%s", err, out)
+		}
+		return nil
+	}
+	if err := install(work, dir, name, runTests); err != nil {
 		return err
 	}
 	p.Generated = time.Now().UTC()
@@ -290,9 +296,9 @@ func countTests(out string) (passed, failed int, output string) {
 }
 
 // install moves the generated files into the repo, fixing import paths on
-// the way. It keeps the old files aside until the tests pass in place, and
-// puts them back if they do not.
-func install(work, dir, name string) error {
+// the way. It keeps the old files aside until runTests passes in place, and
+// puts them back if it does not.
+func install(work, dir, name string, runTests func(dir string) error) error {
 	stage, err := os.MkdirTemp(dir, ".evalgen-")
 	if err != nil {
 		return err
@@ -311,8 +317,8 @@ func install(work, dir, name string) error {
 	if err := swap(fresh, dir); err != nil {
 		return errors.Join(err, swap(old, dir))
 	}
-	if out, err := goCmd(".", nil, "test", "-count=1", "./"+filepath.ToSlash(dir)+"/hidden/"); err != nil {
-		return errors.Join(fmt.Errorf("tests fail in place, so the old tests are back:\n%s", out), swap(old, dir))
+	if err := runTests(dir); err != nil {
+		return errors.Join(fmt.Errorf("tests fail in place, so the old tests are back: %w", err), swap(old, dir))
 	}
 	return nil
 }

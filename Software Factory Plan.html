@@ -523,7 +523,7 @@ ul.rules li b { color: var(--ink); font-weight: 600; }
         <text class="retry-lbl" x="740" y="326" text-anchor="middle">fix still failing → planner rewrites the subgraph (≤ M), back to DAG approval</text>
       </svg>
     </div>
-    <figcaption>You write the outer graph by hand, as a file. The standards node runs first and writes the same rules into every product, so the architect, the implementers, the fix node and the review all work from one file. The planner writes only the shaded nodes, as JSON that the runtime validates before anything runs. Each task node is implemented, checked and merged on its own, so a failure points at one package. A dependent node starts from the integration branch after its dependencies merge, so it builds against real code. Dashed edges have caps. Replanning is the last resort, and it always goes back to you.</figcaption>
+    <figcaption>You write the outer graph by hand, as a file. The standards node runs first and writes the same rules into every product, so the architect, the implementers, the fix node and the review all work from one file. The planner writes only the shaded nodes, as JSON that the runtime validates before anything runs. Each task node is implemented, checked and merged on its own, so a failure points at one package. A dependent node starts from the integration branch after its dependencies merge, so it builds against real code. Dashed edges have caps. Replanning runs only after retries and the fix node fail, and it always goes back to you.</figcaption>
   </figure>
 </section>
 
@@ -694,7 +694,7 @@ sources:
         <li><code>NOTES.md</code>: what it did and any assumptions, in a few lines</li>
         <li>the <code>result</code> event: cost, turns, session id</li>
       </ul>
-      <p>Raw transcripts go to disk for each attempt. They are never passed downstream.</p>
+      <p>Raw transcripts go to disk for each attempt. They are never given to later nodes.</p>
     </div>
   </div>
 </section>
@@ -716,7 +716,7 @@ sources:
   --permission-mode acceptEdits \
   --permission-prompts none \
   --strict-mcp-config</pre>
-      <p><b>Retries:</b> the first retry resumes the session with <code>--resume "$NODE_SESSION"</code> and the failing output, which is cheap because the context is already there. The second retry starts a new session, which escapes a bad approach.</p>
+      <p><b>Retries:</b> the first retry resumes the session with <code>--resume "$NODE_SESSION"</code> and the failing output, which is cheap because the context is already there. The second retry starts a new session, so the node can try a different approach.</p>
       <p>The planner uses <code>--json-schema</code>, so Claude Code checks the DAG's shape before the runtime's own validator runs. Each role's model and effort come from <code>guardrails.yaml</code>.</p>
       <p>Bare mode uses <code>ANTHROPIC_API_KEY</code>, so runs bill at API rates.</p>
     </div>
@@ -730,7 +730,7 @@ factory_approve(gate_id,  → next gate or running
 factory_status(run_id)    → node states, cost
 factory_logs(node_id)     → transcript</pre>
       <p>The MCP server refuses every call when <code>FACTORY_RUN_ID</code> is set in its environment. This is a second guard against a worker calling the factory.</p>
-      <p>Build this last. Once the runtime works, it is a thin layer.</p>
+      <p>Build this last. Once the runtime works, it needs little code.</p>
     </div>
   </div>
 </section>
