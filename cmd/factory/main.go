@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/brokentari/galvantula/internal/event"
+	"github.com/brokentari/galvantula/internal/executor"
 	"github.com/brokentari/galvantula/internal/graph"
 	"github.com/brokentari/galvantula/internal/guardrails"
 	"github.com/brokentari/galvantula/internal/runner"
@@ -107,6 +108,11 @@ func serve(args []string) error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	// Holding the port, this is the only server, so no attempt is using a cache.
+	if err := os.RemoveAll(executor.BuildCaches(root)); err != nil {
+		ln.Close()
+		return err
+	}
 	run := runner.New(ctx, store, *workers)
 	run.Root, run.Auth, run.Commit = root, credential(), factoryCommit()
 	if run.Auth == "" {

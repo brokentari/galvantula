@@ -126,9 +126,7 @@ func (c Claude) agent(ctx context.Context, repo workspace.Repo, t Task, log func
 
 	role := c.Rails.Models.Implementer
 	bare := strings.HasPrefix(c.Auth, "ANTHROPIC_API_KEY=")
-	// A new build cache for each attempt: agent code runs during go test and
-	// could write build results that another run's check would then reuse.
-	cache, err := os.MkdirTemp("", "go-build")
+	cache, err := c.newCache()
 	if err != nil {
 		return Result{}, &InfraError{Err: err}
 	}
@@ -201,7 +199,7 @@ func (c Claude) agent(ctx context.Context, repo workspace.Repo, t Task, log func
 		return spent, &InfraError{Err: err}
 	}
 	log("check")
-	if err := c.check(ctx, repo, cache, wt); err != nil {
+	if err := c.check(ctx, repo, wt); err != nil {
 		return spent, fmt.Errorf("check failed:\n%w", err)
 	}
 	if _, err := repo.CommitAll(wt, fmt.Sprintf("%s: attempt %d", t.Node.ID, t.Attempt)); err != nil {
@@ -263,7 +261,7 @@ func hasNUL(path string) (bool, error) {
 
 // check runs the factory's checks on a worktree. Build and test run the
 // agent's code, so they run in the sandbox too, without any credential.
-func (c Claude) check(ctx context.Context, repo workspace.Repo, cache, wt string) error {
+func (c Claude) check(ctx context.Context, repo workspace.Repo, wt string) error {
 	var errs []error
 	changed, err := repo.Changed(wt)
 	if err != nil {
@@ -277,6 +275,13 @@ func (c Claude) check(ctx context.Context, repo workspace.Repo, cache, wt string
 		return &InfraError{Err: err}
 	}
 	defer os.RemoveAll(home)
+	// Not the agent's cache: Go caches vet and fix results too, and the agent
+	// must not be able to plant a clean result for its own code.
+	cache, err := c.newCache()
+	if err != nil {
+		return &InfraError{Err: err}
+	}
+	defer os.RemoveAll(cache)
 	box := c.box(cache, wt, home, nil)
 	// The checks run the agent's code. It must not change what the runtime commits.
 	box.RW = slices.DeleteFunc(box.RW, func(p string) bool { return p == wt })
@@ -313,6 +318,19 @@ func (c Claude) box(cache, wt, home string, env []string) sandbox.Spec {
 			"GOTELEMETRY=off",
 		}),
 	}
+}
+
+// BuildCaches is where agents and checks get their Go build caches, one new
+// cache each, deleted after use. Agent code runs during go test and could
+// otherwise write build results that a later check reuses. factory serve
+// empties it at start, in case a hard kill left caches behind.
+func BuildCaches(root string) string { return filepath.Join(root, ".cache", "build") }
+
+func (c Claude) newCache() (string, error) {
+	if err := os.MkdirAll(BuildCaches(c.Root), 0o755); err != nil {
+		return "", err
+	}
+	return os.MkdirTemp(BuildCaches(c.Root), "go-build-")
 }
 
 // goModCache is the factory's own Go module cache, mounted read-only:
