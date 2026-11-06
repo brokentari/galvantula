@@ -101,12 +101,12 @@ func (f Fake) Run(ctx context.Context, t Task, log func(string)) (Result, error)
 	}
 	pause := cmp.Or(step.Duration, f.Script.Default.Duration) / time.Duration(len(lines)+1)
 	for _, line := range lines {
-		if err := sleep(ctx, pause); err != nil {
+		if err := Sleep(ctx, pause); err != nil {
 			return Result{}, err
 		}
 		log(line)
 	}
-	if err := sleep(ctx, pause); err != nil {
+	if err := Sleep(ctx, pause); err != nil {
 		return Result{}, err
 	}
 	if t.Attempt <= step.FailAttempts {
@@ -115,7 +115,11 @@ func (f Fake) Run(ctx context.Context, t Task, log func(string)) (Result, error)
 	return Result{Nodes: step.Emit, CostUSD: step.CostUSD}, nil
 }
 
-func sleep(ctx context.Context, d time.Duration) error {
+// Sleep waits for d, or until ctx ends.
+func Sleep(ctx context.Context, d time.Duration) error {
+	if d <= 0 {
+		return nil
+	}
 	t := time.NewTimer(d)
 	defer t.Stop()
 	select {

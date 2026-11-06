@@ -117,8 +117,8 @@ func Run(ctx context.Context, o Options) (Result, error) {
 	cmd.WaitDelay = 10 * time.Second // tools it started must not keep Run waiting after a cancel
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
-	// Wait closes the pipe, and WaitDelay bounds Wait. So a tool that outlives
-	// claude and holds its stdout cannot keep read waiting.
+	// The goroutine closes pw after Wait returns. WaitDelay bounds Wait, so a
+	// tool that outlives claude and holds stdout cannot keep read waiting.
 	stdout, pw := io.Pipe()
 	cmd.Stdout = pw
 	if err := cmd.Start(); err != nil {

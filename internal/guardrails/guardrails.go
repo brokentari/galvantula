@@ -75,8 +75,9 @@ func (g Guardrails) Validate() error {
 	if !goVersion.MatchString(g.Go.Version) {
 		errs = append(errs, fmt.Errorf("go.version %q must look like 1.27", g.Go.Version))
 	}
-	if b := g.Budget; b.NodeUSD <= 0 || b.RunUSD < b.NodeUSD || b.NodeMinutes <= 0 {
-		errs = append(errs, fmt.Errorf("budget: node_usd and node_minutes must be positive, and run_usd at least node_usd"))
+	// claude reads --max-budget-usd to the cent, and may take 0.00 as no cap.
+	if b := g.Budget; b.NodeUSD < 0.01 || b.RunUSD < b.NodeUSD || b.NodeMinutes <= 0 {
+		errs = append(errs, errors.New("budget: node_usd must be at least 0.01, node_minutes positive, and run_usd at least node_usd"))
 	}
 	m := g.Models
 	roles := []struct {

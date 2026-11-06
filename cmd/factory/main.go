@@ -133,8 +133,6 @@ func serve(args []string) error {
 	return nil
 }
 
-// credential returns the credential that sandboxed agents use, from this
-// process's environment. A token from claude setup-token comes first.
 // sandboxReady reports what agents need that this host lacks. Without the
 // check, each attempt would fail as if the agent were at fault.
 func sandboxReady() error {
@@ -149,6 +147,8 @@ func sandboxReady() error {
 	return nil
 }
 
+// credential returns the credential that sandboxed agents use, from this
+// process's environment. A token from claude setup-token comes first.
 func credential() string {
 	for _, k := range []string{"CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"} {
 		if v := os.Getenv(k); v != "" {

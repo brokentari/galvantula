@@ -1,51 +1,65 @@
 # Review: phase-1
 
-Reviewer: claude-sonnet-5-5 at high effort, in a new session. Range: 6189377..338be87. Date: 2026-11-06. Cost: $0.53.
+Reviewer: claude-sonnet-5-5 at high effort, in a new session. Range: 6189377..a8fb46b. Date: 2026-11-06. Cost: $0.56.
 
-What this change does: Phase 1 adds a real agent node. Claude Code runs in a bubblewrap sandbox (a Linux tool that hides the host's files) in its own git worktree. After the agent exits, the runtime checks the work, then commits and merges it. It also adds budgets, retry rules, a usage-limit stop, and `factory eval`, which runs evals N times and scores each product with hidden tests. I assumed the load is one person on one machine, with 1 to 3 runs at a time. I read the diff and spot-checked the runner and server code. I could not run any tests.
+**What this change does:** Phase 1 adds a real agent node. Claude Code runs in a bubblewrap sandbox, in a git worktree. The runtime checks the agent's work (gofmt, vet, `go fix`, build, tests, frozen files), then commits and merges it. It also adds spend and time limits, retry and backoff rules, a usage-limit stop, `factory eval` for scoring runs against hidden tests, cost display in the UI, and fixes from six earlier review rounds.
 
-## Should fix
+I assumed one person running the server on their own machine, with one agent node at a time. The README says the same.
 
-1. **A missing `bwrap` looks like the agent's fault** (`internal/sandbox/sandbox.go:L31-50`, `internal/claude/claude.go` Start error path, `cmd/factory/main.go` serve)
-   - **What this is:** Every agent attempt and every check step starts `bwrap`. The README's "Run a real agent" section never says that `bwrap` and Linux are needed.
-   - **Problem:** If `bwrap` is missing, `cmd.Start` fails with `claude -p: exec: "bwrap": not found`. That is not `ErrNoResult`, so it counts as a task failure. The run burns its 2 retries and ends with a vague "node build failed". This setup is likely, because your own platform is darwin, where `bwrap` does not exist.
-   - **Fix:** In `serve`, call `exec.LookPath("bwrap")` when a credential is set, and return a clear error if it is missing. Add one README line: "needs Linux and bubblewrap". Go also has to be reachable as `/usr/bin/go`, because the sandbox `PATH` is only `/usr/bin`.
-   - **If we skip it:** A new user wastes a few minutes finding a setup problem that the output blames on the agent.
+I read the diff and the server code it depends on (`internal/server/server.go`, `readJSON`, `localOnly`). I also read the UI event handling in `ui/src/App.tsx`. I checked that nothing else still points at the deleted plan `.md` file, and counted the 31 results lines (11 wordfreq, 10 csvq, 10 todo).
 
-2. **A blip during the resumed attempt throws away the check feedback and the session** (`internal/runner/runner.go:L268-272`, `internal/executor/claude.go:L142-163`)
-   - **What this is:** After the first task failure, the next attempt resumes the session with the check output as feedback. `Feedback` is `ns.LastError`, and `Resume` needs `LastClass == Task`.
-   - **Problem:** Say attempt 1 fails the check, and attempt 2 (the resume) fails with an infra error, such as "claude -p gave no result" from a rate limit. `LastError` is now the infra text and `LastClass` is `Infra`. So attempt 3 does not resume. It resets the worktree and starts a new session, and the brief says "The factory reported: infra: …". The real check output is lost and the session's context is paid for again. The latest commit fixed only the opposite order (infra first, then task).
-   - **Fix:** Keep the last task error apart. Add `LastTaskError string` to `NodeState`, set it only when `Class == Task`, and use it for `Feedback`. Resume when `TaskFailures == 1`, whatever the last class was. Add one runner test: a task failure, then an infra failure, then check the third `Task`.
-   - **If we skip it:** The agent gets misleading feedback and a fresh session at the cost of a full attempt, which is up to $3. This happens most under rate limits.
+### Must fix
+None. I traced these paths and found no bug:
+- The retry and resume logic, including an infra failure between task failures.
+- The backoff arithmetic.
+- Budget and run-finish logic.
+- The cost fold in Go and TypeScript.
+- Git use with `GIT_DIR` set.
+- The new `Run` stdout pipe.
 
-3. **The new retry timing test can fail on a slow machine** (`internal/runner/runner_test.go` `TestInfraRetriesBackOff`)
-   - **What this is:** The test says the first infra retry must start within 200 ms (`d >= r.infraBackoff` fails).
-   - **Problem:** Between the two attempts the runner writes events to SQLite, with fsync. On a loaded CI box that can take longer than 200 ms, so the test fails at random.
-   - **Fix:** Set `infraBackoff` to about 2 s and check that the first gap is less than half of it. Or compare the gaps: the second must be clearly longer than the first.
-   - **If we skip it:** The test fails on some runs and people stop trusting it.
+The Content-Type check and Host check already block the obvious web-page attacks on the server, which now holds a credential.
 
-## Nice to have
+### Should fix
 
-4. **An attempt cut off by a shutdown loses its cost** (`internal/runner/runner.go:L312-315`)
-   - **What this is:** On shutdown the outcome is dropped and the node stays "running". On restart it is recorded as an infra failure with cost 0.
-   - **Problem:** The killed agent may have spent up to `node_usd`. Several restarts in one run can pass `run_usd` without the runtime noticing.
-   - **Fix:** On shutdown, pass `o.res.CostUSD` into that later infra failure. This takes some plumbing, so accepting the gap and writing it down as a `shortcut:` comment is also fine.
-   - **If we skip it:** The run budget is a little too low after restarts.
+1. **Doc comments are mixed up** (`cmd/factory/main.go`, above `sandboxReady` and `credential`)
+   - **What this is:** Each function should have a one-line comment above it saying what it does.
+   - **Problem:** The comment for `credential` ("credential returns the credential… A token from claude setup-token comes first.") sits directly above the comment for `sandboxReady`. The two run together as one block, so `sandboxReady` is documented as if it returned the credential. `credential` has no comment.
+   - **Fix:** Move the first two lines to sit above `func credential()`. Leave the `sandboxReady` lines above `sandboxReady`.
+   - **If we skip it:** Readers and `go doc` get the wrong description of both functions.
 
-5. **The start API can spend your Claude plan, and the README does not say so** (`internal/server/server.go` `startRun`, README "Run a real agent")
-   - **What this is:** `POST /api/runs` with `executor: "claude"` now starts a paid agent. The server only checks the Host header and the JSON Content-Type.
-   - **Problem:** On a shared machine, any local user can `curl localhost:7070` and use the owner's token, with no limit on how many runs. Browsers are blocked by the checks.
-   - **Fix:** Add one README sentence: "the API has no login, so run the server only on a machine you alone use". The `-addr` help text already says this, but the README does not.
-   - **If we skip it:** Someone on a shared host is surprised by the bill.
+2. **Comment says the wrong thing closes the pipe** (`internal/claude/claude.go`, comment above `io.Pipe()`)
+   - **What this is:** The comment explains why a stray child process cannot hang `Run`.
+   - **Problem:** It says "Wait closes the pipe". The code closes `pw` itself, in the goroutine, after `Wait` returns. `Wait` only closes its own OS pipe. A later reader may remove the `pw.Close()` and bring the hang back.
+   - **Fix:** Write: "The goroutine closes pw after Wait returns. WaitDelay bounds Wait, so a tool that outlives claude and holds stdout cannot keep read waiting."
+   - **If we skip it:** The comment stays wrong, and someone can break the cancel fix without noticing.
 
-6. **A lost eval run keeps spending** (`cmd/factory/eval.go:L158-161`)
-   - **What this is:** After 30 quiet minutes, `evalOnce` gives up on the run and records an error.
-   - **Problem:** The server may still be running that run, which can spend up to `run_usd`. The error text asks the user to check the server, but nothing stops the run.
-   - **Fix:** Add one more sentence to the error text, with the run id, saying the run may still be going.
-   - **If we skip it:** A stuck run can cost up to $12 with no warning.
+### Nice to have
 
-**Prose:** I found no problems in the README, comments, guardrails text or commit messages. They use short active sentences and plain words.
+3. **A budget under half a cent passes validation but becomes `0.00`** (`internal/guardrails/guardrails.go` `Validate`, and `claude.go` `--max-budget-usd` formatting)
+   - **What this is:** `node_usd` must be above 0, and `Run` passes it to `claude` as `%.2f`.
+   - **Problem:** `node_usd: 0.004` is accepted and sent as `0.00`. The `evalgen` fix in this same change says claude reads a budget under a cent as `0.00`. That value may mean no cap.
+   - **Fix:** Require `NodeUSD >= 0.01` in `Validate`, and add one line to the existing budget test.
+   - **If we skip it:** A typo in `guardrails.yaml` can remove the per-attempt cap, and nothing warns you.
 
-Verdict: fix 1 and 2 first, then 3.
+4. **`fmt.Errorf` with no format verbs** (`internal/guardrails/guardrails.go`, the new `budget:` error)
+   - **What this is:** The error has a fixed message and no arguments.
+   - **Problem:** `errors.New` is the plain form.
+   - **Fix:** Use `errors.New(...)`.
+   - **If we skip it:** Nothing breaks. It only adds noise.
 
-Not checked: I did not run any tests, including the sandbox, eval and bwrap tests. I did not check that the `uuid` import path resolves to the Go 1.27 standard library. `go.mod` lists `github.com/google/uuid` only as indirect. I did not run `go fix -diff`.
+5. **Two copies of a context-aware sleep** (`internal/runner/runner.go` `sleep`, and `executor.sleep` in `internal/executor/executor.go`)
+   - **What this is:** Both wait for a duration or until the context ends.
+   - **Problem:** The code is duplicated. I did not check whether the executor copy also guards `d <= 0`.
+   - **Fix:** Export one copy, for example `executor.Sleep`, and use it from the runner. Keep the `d <= 0` guard.
+   - **If we skip it:** Two copies must change together if the behavior changes.
+
+### Prose
+No findings beyond 1 and 2. The README, the eval error messages and the other comments I read are plain and active.
+
+Verdict: fix 1 and 2 first (both are comment-only edits), then ship.
+Lean: -10 lines possible (finding 5).
+Not checked:
+- I could not run anything, so I did not run the tests, `go fix -diff`, or the sandbox on this host.
+- I did not verify that the Go 1.27 `uuid` import path is `"uuid"`.
+- The README's 31/31 pass result was recorded before the later fixes (read-only check mount, binary removal, sandboxed hidden tests). Re-run the evals before you cite it.
+- The agent sandbox and the hidden-test sandbox both mount `runs/.cache/go-build` read-write. An agent could in theory leave poisoned cache entries that scoring then uses. I judged it too contrived to list as a finding.

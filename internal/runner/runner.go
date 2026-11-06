@@ -291,7 +291,7 @@ func (r *Runner) drive(id string, a *active) error {
 						}
 					}
 					var res executor.Result
-					err := sleep(r.ctx, wait)
+					err := executor.Sleep(r.ctx, wait)
 					if err == nil {
 						res, err = exec.Run(r.ctx, task, log)
 					}
@@ -401,20 +401,6 @@ func stopReason(st *event.State) string {
 		return fmt.Sprintf("the run spent $%.2f of its $%.2f budget", st.CostUSD, budget)
 	}
 	return ""
-}
-
-func sleep(ctx context.Context, d time.Duration) error {
-	if d <= 0 {
-		return nil
-	}
-	t := time.NewTimer(d)
-	defer t.Stop()
-	select {
-	case <-t.C:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
 }
 
 // finished decides the run's outcome. Call it only when nothing is running.

@@ -20,6 +20,10 @@ func TestRunBudgetCoversOneNode(t *testing.T) {
 	if err := g.Validate(); err == nil || !strings.Contains(err.Error(), "run_usd") {
 		t.Fatalf("got %v, want an error about run_usd", err)
 	}
+	g.Budget.NodeUSD, g.Budget.RunUSD = 0.004, 1 // claude would see 0.00
+	if err := g.Validate(); err == nil || !strings.Contains(err.Error(), "node_usd") {
+		t.Fatalf("got %v, want an error about node_usd", err)
+	}
 }
 
 func TestEvalAuthorMustNotBuild(t *testing.T) {
