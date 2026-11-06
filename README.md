@@ -7,8 +7,11 @@ node. A React UI shows each run live. The full plan is in
 
 **Status: phase 1 (one sandboxed agent) is built.** The first eval batch
 passed the hidden tests in all 31 runs: one trial run of wordfreq, then 10
-runs of each eval (`evals/results/2026-11-06.jsonl`). Phase 0 passed its standards review
-(`docs/reviews/phase-0.md`).
+runs of each eval (`evals/results/2026-11-06.jsonl`). The median cost was
+$0.10 to $0.17 per run, under the phase's limit of $0.50. That batch ran on
+commit 4f02b54, before the fixes from the phase-1 review, so the batch must
+run again on the final code before phase 1 is done. Phase 0 passed its
+standards review (`docs/reviews/phase-0.md`).
 
 ## Run the demo
 

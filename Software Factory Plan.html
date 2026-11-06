@@ -794,7 +794,7 @@ factory_logs(node_id)     → transcript</pre>
         <h3>One sandboxed agent node</h3>
         <p class="build">ClaudeCodeExecutor in bubblewrap, in one worktree. The standards node and <code>guardrails.yaml</code>. The check is gofmt, vet, <code>go fix -diff</code>, build and the agent's own tests, plus frozen files: nothing on main before the agent started may change. The eval's hidden tests only score the result; they never reach the agent. Add the retry policy, budgets and timeouts.</p>
       </div>
-      <p class="done"><b>Done when</b>At least 8 of 10 runs pass the hidden tests on each of 3 eval tasks, under a median cost you set after the first runs. Also, a planted edit to a frozen file fails the check, and so does a planted <code>for i := 0; i &lt; n; i++</code>.</p>
+      <p class="done"><b>Done when</b>At least 8 of 10 runs pass the hidden tests on each of 3 eval tasks, under a median cost of $0.50 per run, set after the first runs. Also, a planted edit to a frozen file fails the check, and so does a planted <code>for i := 0; i &lt; n; i++</code>.</p>
     </li>
     <li class="phase" data-layer="graph">
       <span class="num">2</span>
