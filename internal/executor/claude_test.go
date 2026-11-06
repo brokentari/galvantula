@@ -95,6 +95,12 @@ func TestAgentPassesCheckAndMerges(t *testing.T) {
 			t.Errorf("main lacks %s: %v", f, err)
 		}
 	}
+	if _, err := os.Stat(filepath.Join(c.Root, "r", ".cache", "go-build")); err != nil {
+		t.Errorf("the run has no build cache of its own: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(c.Root, ".cache", "go-build")); err == nil {
+		t.Error("runs share a build cache")
+	}
 	for _, bin := range []string{"product", "built"} {
 		if _, err := os.Stat(filepath.Join(repo, bin)); err == nil {
 			t.Errorf("binary %s reached the product", bin)
