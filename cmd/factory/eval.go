@@ -33,7 +33,7 @@ type evalResult struct {
 	At            time.Time `json:"at"`
 	Eval          string    `json:"eval"`
 	Run           string    `json:"run"`
-	Commit        string    `json:"commit"` // the server's commit when the run started, with -dirty for uncommitted changes
+	Commit        string    `json:"commit"` // the commit the server started on, with -dirty for uncommitted changes
 	Graph         string    `json:"graph"`
 	Implementer   string    `json:"implementer"` // model at effort
 	ClaudeVersion string    `json:"claude_version"`

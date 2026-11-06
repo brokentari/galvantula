@@ -99,6 +99,7 @@ func TestFactoryDemoRun(t *testing.T) {
 	store := openStore(t)
 	r := New(t.Context(), store, 3)
 	r.Executor = fast
+	r.Commit = "abc1234"
 
 	run, err := r.Start(Run{Graph: mustParse(t, string(g)), Executor: "fake", FakeScript: string(script)})
 	if err != nil {
@@ -128,6 +129,9 @@ func TestFactoryDemoRun(t *testing.T) {
 	st, evs := waitUntil(t, store, run, "the run finishes", runDone)
 	if st.Status != event.RunSucceeded {
 		t.Fatalf("run %s: %s", st.Status, st.Reason)
+	}
+	if st.Commit != "abc1234" {
+		t.Errorf("run recorded commit %q, want the runner's abc1234", st.Commit)
 	}
 
 	// In parallel: both packages start before either one finishes.
