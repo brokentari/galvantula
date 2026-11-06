@@ -213,3 +213,28 @@ func TestFirstRetryResumesThenStartsOver(t *testing.T) {
 		t.Errorf("attempt 2 args %q do not resume session %s", second, id)
 	}
 }
+
+// The check must not use the agent's build cache: Go caches vet and fix
+// results, so an agent could plant a clean result for its own code. The
+// fake agent marks its cache; its test fails if the check's cache has the mark.
+func TestCheckCacheIsNotTheAgents(t *testing.T) {
+	_, run := setUpRun(t)
+	fakeAgent(t, writeFile("main.go", goodMain)+`touch "$GOCACHE/planted"
+`+writeFile("main_test.go", `package main
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+func TestCacheIsNew(t *testing.T) {
+	if _, err := os.Stat(filepath.Join(os.Getenv("GOCACHE"), "planted")); err == nil {
+		t.Fatal("the check runs with the agent's build cache")
+	}
+}
+`))
+	if _, err := run(Task{Node: impl, Attempt: 1}); err != nil {
+		t.Fatalf("the check failed: %v", err)
+	}
+}
