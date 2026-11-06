@@ -4,7 +4,10 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/brokentari/galvantula/internal/guardrails"
 )
 
 func TestCountTests(t *testing.T) {
@@ -100,6 +103,17 @@ func TestPutBackAfterHalfMove(t *testing.T) {
 		got, err := os.ReadFile(filepath.Join(dir, path))
 		if err != nil || string(got) != want {
 			t.Errorf("%s = %q, %v; want %q", path, got, err, want)
+		}
+	}
+}
+
+// The path check must run before anything else, so a bad path costs no
+// model call and install never writes outside the repo.
+func TestGenerateRejectsPathsOutsideRepo(t *testing.T) {
+	for _, dir := range []string{"/tmp/x", "../x", ""} {
+		err := generate(t.Context(), guardrails.Guardrails{}, dir, 0, 1)
+		if err == nil || !strings.Contains(err.Error(), "inside this repo") {
+			t.Errorf("generate(%q): got %v, want the path error", dir, err)
 		}
 	}
 }

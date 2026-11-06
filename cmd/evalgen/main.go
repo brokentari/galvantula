@@ -44,7 +44,7 @@ const (
 	minTests        = 5
 )
 
-const role = `You write hidden acceptance tests for a software factory's eval set. Another system will build a Go program from spec.md alone. Your tests decide whether it built the right thing. They are the ground truth, so they must follow from the spec and nothing else.`
+const role = `You write hidden acceptance tests for a software factory's eval set. Another system will build a Go program from spec.md alone. Your tests decide whether it built the right thing. They decide whether the build is right, so they must follow from the spec and nothing else.`
 
 const task = `Write the hidden acceptance tests and a reference answer for the spec in spec.md.
 
@@ -176,7 +176,11 @@ func generate(ctx context.Context, g guardrails.Guardrails, dir string, retries 
 		log.Printf("%s: checks failed, sending them back: %v", name, firstLine(checkErr))
 		opts.Resume = res.SessionID
 		opts.Prompt = "The checks failed:\n\n" + checkErr.Error() + "\n\nFix the files, then run the checks again."
-		opts.MaxBudgetUSD = max(budget-p.CostUSD, 1)
+		left := budget - p.CostUSD
+		if left <= 0 {
+			return fmt.Errorf("checks still fail and the $%.2f budget is spent: %w", budget, checkErr)
+		}
+		opts.MaxBudgetUSD = left
 	}
 
 	runTests := func(dir string) error {
@@ -311,8 +315,21 @@ func install(work, dir, name string, runTests func(dir string) error) error {
 	if err != nil {
 		return err
 	}
-	defer os.RemoveAll(stage)
-	fresh, old := filepath.Join(stage, "new"), filepath.Join(stage, "old")
+	old := filepath.Join(stage, "old")
+	keep := false // set when old files may still be in stage
+	defer func() {
+		if !keep {
+			os.RemoveAll(stage)
+		}
+	}()
+	restore := func(installed, aside []string) error {
+		if err := putBack(dir, old, installed, aside); err != nil {
+			keep = true
+			return fmt.Errorf("could not put the old tests back; they are in %s: %w", stage, err)
+		}
+		return nil
+	}
+	fresh := filepath.Join(stage, "new")
 	if err := copyTree(filepath.Join(work, name), fresh); err != nil {
 		return err
 	}
@@ -321,14 +338,14 @@ func install(work, dir, name string, runTests func(dir string) error) error {
 	}
 	aside, err := moveParts(dir, old)
 	if err != nil {
-		return errors.Join(err, putBack(dir, old, nil, aside))
+		return errors.Join(err, restore(nil, aside))
 	}
 	installed, err := moveParts(fresh, dir)
 	if err != nil {
-		return errors.Join(err, putBack(dir, old, installed, aside))
+		return errors.Join(err, restore(installed, aside))
 	}
 	if err := runTests(dir); err != nil {
-		return errors.Join(fmt.Errorf("tests fail in place, so the old tests are back: %w", err), putBack(dir, old, installed, aside))
+		return errors.Join(fmt.Errorf("tests fail in place, so the old tests are back: %w", err), restore(installed, aside))
 	}
 	return nil
 }

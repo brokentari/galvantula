@@ -6,7 +6,7 @@ runtime · Go | UI · TypeScript + React | node worker · claude -p | sandbox ·
 
 > The HTML version has the two diagrams. This file has the same text.
 
-## Ground rules
+## Rules
 
 - **Tests and standards are frozen.** The architect writes the interfaces and the acceptance tests. The standards node writes `AGENTS.md`. You approve both. No later node may change them.
 - **Tooling decides pass or fail.** Build, vet, gofmt and tests decide. The review agent can only open a fix node. It never passes or fails a run.
@@ -234,7 +234,7 @@ bwrap --unshare-all --share-net --die-with-parent --clearenv \
 
 Each phase ends with a standards review. `phasereview` asks the reviewer model, in a new session, to review the phase's code and prose against ponytail-review, the modern Go guidelines and the Orwell rules. The phase is done when the verdict is "Ship." and the report is committed in `docs/reviews/`.
 
-0. **skeleton — Graph, event log, scheduler.** Graph types loaded from `graphs/*.yaml`, a validator, the scheduler, the SQLite event log, gates, and a FakeExecutor. A minimal UI: the graph, node states, a log tail, and approve buttons. Write the first 3 eval specs and their hidden tests.
+0. **first version — Graph, event log, scheduler.** Graph types loaded from `graphs/*.yaml`, a validator, the scheduler, the SQLite event log, gates, and a FakeExecutor. A minimal UI: the graph, node states, a log tail, and approve buttons. Write the first 3 eval specs and their hidden tests.
    **Done when** a fake run where two nodes run at the same time, with a retry and a gate, plays back in the UI. If you kill the runtime in the middle of a run, it resumes from the log. No LLM yet.
 1. **loop — One sandboxed agent node.** ClaudeCodeExecutor in bubblewrap, in one worktree. The standards node and `guardrails.yaml`. The check is build, vet, `go fix -diff` and test against your tests, plus the frozen-file hashes. Add the retry policy, budgets and timeouts.
    **Done when** at least 8 of 10 runs pass on each of 3 eval tasks, under a median cost you set after the first runs. Also, a planted edit to a frozen test fails the check, and so does a planted `for i := 0; i < n; i++`.

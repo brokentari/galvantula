@@ -5,7 +5,7 @@ comes out. A Go runtime owns a graph of work. Claude Code runs each agent
 node. A React UI shows each run live. The full plan is in
 [Software Factory Plan.md](Software%20Factory%20Plan.md).
 
-**Status: phase 0 (skeleton) is built and waits for its standards review**
+**Status: phase 0 (the first version) is built and waits for its standards review**
 (`docs/reviews/phase-0.md`). There is no LLM in the runtime yet. A fake
 executor plays a script, so you can watch the runtime and the UI work.
 
@@ -34,7 +34,7 @@ that finished does not run again.
 
 Use **Replay** and the slider to step through any run, event by event.
 
-## How it fits together
+## How the parts connect
 
 | path | what it is |
 |---|---|
