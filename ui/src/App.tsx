@@ -68,7 +68,9 @@ export function App() {
   const [playing, setPlaying] = useState(false);
   const [selected, setSelected] = useState<string>();
 
-  const shown = useMemo(() => events.slice(0, cursor ?? count), [events, count, cursor]);
+  // Live mode shows the growing list itself, so a new event copies nothing. count is a
+  // dependency because events changes in place.
+  const shown = useMemo(() => (cursor === null ? events : events.slice(0, cursor)), [events, count, cursor]);
   const run = useMemo(() => (cursor === null ? liveRun : fold(shown)), [cursor, liveRun, shown]);
   const live = cursor === null;
 

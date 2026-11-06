@@ -265,6 +265,9 @@ func (c Claude) check(ctx context.Context, repo workspace.Repo, wt string) error
 	}
 	defer os.RemoveAll(home)
 	box := c.box(wt, home, nil)
+	// The checks run the agent's code. It must not change what the runtime commits.
+	box.RW = slices.DeleteFunc(box.RW, func(p string) bool { return p == wt })
+	box.RO = append(box.RO, wt)
 	for _, step := range [][]string{
 		{"gofmt", "-l", "."},
 		{"go", "vet", "./..."},

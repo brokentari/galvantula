@@ -212,6 +212,12 @@ func TestRunFails(t *testing.T) {
 			want:   "node a failed: tests fail",
 		},
 		{
+			name:   "a node fails while a gate waits",
+			graph:  "name: g\nnodes:\n  - {id: a, kind: agent}\n  - {id: ok, kind: gate}",
+			script: "nodes:\n  a: {fail_attempts: 1, error: tests fail}",
+			want:   "node a failed: tests fail",
+		},
+		{
 			name:   "gate rejected",
 			graph:  "name: g\nnodes:\n  - {id: a, kind: agent}\n  - {id: ok, kind: gate, deps: [a]}",
 			reject: "ok",

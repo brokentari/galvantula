@@ -156,6 +156,7 @@ func evalOnce(store *event.Store, addr, root, dir, g string) (evalResult, error)
 	}
 	var st *event.State
 	var evs []event.Event
+	seen, last := 0, time.Now()
 	for {
 		time.Sleep(5 * time.Second)
 		if evs, err = store.Events(id, 0); err != nil {
@@ -166,6 +167,13 @@ func evalOnce(store *event.Store, addr, root, dir, g string) (evalResult, error)
 		}
 		if st.Status != event.RunRunning {
 			break
+		}
+		if len(evs) > seen {
+			seen, last = len(evs), time.Now()
+		}
+		// An attempt logs at least once per node time limit, and its check takes minutes, not more.
+		if quiet := time.Since(last); quiet > time.Duration(st.Rails.Budget.NodeMinutes+10)*time.Minute {
+			return evalResult{}, fmt.Errorf("run %s logged nothing for %s; check that the server still runs it", id, quiet.Round(time.Minute))
 		}
 	}
 	r := evalResult{
@@ -213,7 +221,10 @@ func hiddenTests(ctx context.Context, root, dir, product string) (passed, total 
 	if err := os.MkdirAll(cache, 0o755); err != nil {
 		return 0, 0, err
 	}
-	hidden := filepath.Join(repo, dir, "hidden")
+	hidden, err := filepath.Abs(filepath.Join(dir, "hidden"))
+	if err != nil {
+		return 0, 0, err
+	}
 	box := sandbox.Spec{
 		Dir: hidden,
 		RO: []string{product, strings.TrimSpace(string(modCache)), hidden,

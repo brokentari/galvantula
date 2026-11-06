@@ -117,6 +117,7 @@ func TestCheckFailures(t *testing.T) {
 		{"old for loop", writeFile("main.go", oldLoop), "go fix -diff"},
 		{"unformatted", writeFile("main.go", "package main\nfunc main(){}\n"), "gofmt -l"},
 		{"failing test", writeFile("main.go", goodMain) + writeFile("main_test.go", "package main\n\nimport \"testing\"\n\nfunc TestNo(t *testing.T) { t.Fatal(\"no\") }\n"), "go test"},
+		{"test writes to the worktree", writeFile("main.go", goodMain) + writeFile("main_test.go", "package main\n\nimport (\n\t\"os\"\n\t\"testing\"\n)\n\nfunc TestEdit(t *testing.T) {\n\tif err := os.WriteFile(\"spec.md\", nil, 0o644); err != nil {\n\t\tt.Fatal(err)\n\t}\n}\n"), "read-only file system"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -136,6 +137,27 @@ func TestCheckFailures(t *testing.T) {
 				t.Error("failed work was merged into main")
 			}
 		})
+	}
+}
+
+// After the agent exits, host git works in its worktree. The agent can
+// replace the .git link with a repo of its own, with a hook and an
+// fsmonitor command. Host git must run neither.
+func TestAgentGitDirIsIgnored(t *testing.T) {
+	c, run := setUpRun(t)
+	marker := filepath.Join(t.TempDir(), "escaped")
+	fakeAgent(t, writeFile("main.go", goodMain)+
+		"rm .git && mkdir -p .git/objects .git/refs .git/hooks && echo 'ref: refs/heads/main' > .git/HEAD\n"+
+		"printf '[core]\\n\\trepositoryformatversion = 0\\n\\tfsmonitor = touch "+marker+"\\n' > .git/config\n"+
+		"printf '#!/bin/sh\\ntouch "+marker+"\\n' > .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit\n")
+	if _, err := run(Task{Node: impl, Attempt: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(marker); err == nil {
+		t.Fatal("host git ran a command from the agent's .git")
+	}
+	if _, err := os.Stat(filepath.Join(c.Root, "r", "repo", "main.go")); err != nil {
+		t.Errorf("main lacks main.go: %v", err)
 	}
 }
 

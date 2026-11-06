@@ -11,6 +11,17 @@ func TestRepoGuardrailsAreValid(t *testing.T) {
 	}
 }
 
+func TestRunBudgetCoversOneNode(t *testing.T) {
+	g, err := Load("../../guardrails.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	g.Budget.RunUSD = g.Budget.NodeUSD / 2
+	if err := g.Validate(); err == nil || !strings.Contains(err.Error(), "run_usd") {
+		t.Fatalf("got %v, want an error about run_usd", err)
+	}
+}
+
 func TestEvalAuthorMustNotBuild(t *testing.T) {
 	g, err := Load("../../guardrails.yaml")
 	if err != nil {

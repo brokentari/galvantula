@@ -58,7 +58,7 @@ func (r Repo) Reset(dir string) error {
 	if _, err := r.git(dir, "reset", "-q", "--hard", "main"); err != nil {
 		return err
 	}
-	_, err := r.git(dir, "clean", "-q", "-fdx")
+	_, err := r.git(dir, "clean", "-q", "-ffdx") // -ff also removes git repos the agent made
 	return err
 }
 
@@ -87,9 +87,18 @@ func (r Repo) Merge(node string) error {
 	return err
 }
 
+// git runs git in dir on the host. An agent can write anything in its
+// worktree, including the .git link, so for a worktree git is told where
+// the real repo is and never reads a .git it finds there. It runs no hooks
+// and no fsmonitor command.
 func (r Repo) git(dir string, args ...string) (string, error) {
-	cmd := exec.Command("git", append([]string{"-c", "user.name=galvantula", "-c", "user.email=factory@localhost"}, args...)...)
+	cmd := exec.Command("git", append([]string{"-c", "user.name=galvantula", "-c", "user.email=factory@localhost",
+		"-c", "core.hooksPath=" + os.DevNull, "-c", "core.fsmonitor=false"}, args...)...)
 	cmd.Dir = dir
+	if filepath.Clean(dir) != filepath.Clean(r.Dir) {
+		// git worktree add names a worktree's folder in .git/worktrees after the worktree.
+		cmd.Env = append(os.Environ(), "GIT_DIR="+filepath.Join(r.Dir, ".git", "worktrees", filepath.Base(dir)), "GIT_WORK_TREE="+dir)
+	}
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("git %s: %w\n%s", strings.Join(args, " "), err, out)
