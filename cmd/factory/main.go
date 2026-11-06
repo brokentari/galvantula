@@ -22,6 +22,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -107,7 +108,7 @@ func serve(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	run := runner.New(ctx, store, *workers)
-	run.Root, run.Auth = root, credential()
+	run.Root, run.Auth, run.Commit = root, credential(), factoryCommit()
 	if run.Auth == "" {
 		slog.Warn("no CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY; only fake runs can start")
 	} else if err := sandboxReady(); err != nil {
@@ -131,6 +132,22 @@ func serve(args []string) error {
 	}
 	run.Wait()
 	return nil
+}
+
+// factoryCommit names the code this server runs, so eval results from two
+// versions of the factory never mix. Results are left out: an eval batch
+// writes them, and that does not change the code.
+func factoryCommit() string {
+	head, err := exec.Command("git", "rev-parse", "--short", "HEAD").Output()
+	if err != nil {
+		slog.Warn("runs will not record a commit: git cannot name one", "err", err)
+		return ""
+	}
+	c := strings.TrimSpace(string(head))
+	if status, err := exec.Command("git", "status", "--porcelain", "--", ".", ":!evals/results").Output(); err != nil || len(status) > 0 {
+		c += "-dirty"
+	}
+	return c
 }
 
 // sandboxReady reports what agents need that this host lacks. Without the

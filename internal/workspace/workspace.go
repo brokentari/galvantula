@@ -94,7 +94,7 @@ func (r Repo) Merge(node string) error {
 // and no fsmonitor command.
 func (r Repo) git(dir string, args ...string) (string, error) {
 	cmd := exec.Command("git", append([]string{"-c", "user.name=galvantula", "-c", "user.email=factory@localhost",
-		"-c", "core.hooksPath=" + os.DevNull, "-c", "core.fsmonitor=false"}, args...)...)
+		"-c", "core.hooksPath=" + os.DevNull, "-c", "core.fsmonitor=false", "-c", "commit.gpgsign=false"}, args...)...)
 	cmd.Dir = dir
 	if filepath.Clean(dir) != filepath.Clean(r.Dir) {
 		// git worktree add names a worktree's folder in .git/worktrees after the worktree.

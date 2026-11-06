@@ -98,6 +98,7 @@ export interface RunCreatedData {
   fake_script?: string;
   spec?: string;
   guardrails?: Guardrails;
+  commit?: string;
 }
 
 export interface RunFinishedData {

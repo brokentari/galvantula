@@ -62,6 +62,7 @@ type RunCreatedData struct {
 	FakeScript string                `json:"fake_script,omitempty"`
 	Spec       string                `json:"spec,omitempty"`
 	Guardrails guardrails.Guardrails `json:"guardrails,omitzero"`
+	Commit     string                `json:"commit,omitempty"` // the server's code, with -dirty for uncommitted changes
 }
 
 // GraphUpdatedData is also how a plan node succeeds; CostUSD is that attempt's cost.
@@ -169,6 +170,7 @@ type State struct {
 	FakeScript string
 	Spec       string
 	Rails      guardrails.Guardrails
+	Commit     string
 	CostUSD    float64
 	Status     RunStatus
 	Reason     string
@@ -200,7 +202,7 @@ func (s *State) Apply(e Event) error {
 			return err
 		}
 		*s = State{Run: e.Run, Graph: d.Graph, Executor: d.Executor, FakeScript: d.FakeScript,
-			Spec: d.Spec, Rails: d.Guardrails, Status: RunRunning, Nodes: map[string]*NodeState{}}
+			Spec: d.Spec, Rails: d.Guardrails, Commit: d.Commit, Status: RunRunning, Nodes: map[string]*NodeState{}}
 		for _, n := range d.Graph.Nodes {
 			s.Nodes[n.ID] = &NodeState{Status: Pending}
 		}

@@ -33,7 +33,7 @@ type evalResult struct {
 	At            time.Time `json:"at"`
 	Eval          string    `json:"eval"`
 	Run           string    `json:"run"`
-	Commit        string    `json:"commit"` // the factory's commit, with -dirty for uncommitted changes
+	Commit        string    `json:"commit"` // the server's commit when the run started, with -dirty for uncommitted changes
 	Graph         string    `json:"graph"`
 	Implementer   string    `json:"implementer"` // model at effort
 	ClaudeVersion string    `json:"claude_version"`
@@ -68,10 +68,6 @@ func runEvals(args []string) error {
 		if _, err := os.Stat(p); err != nil {
 			return fmt.Errorf("run factory eval from the repo root: %w", err)
 		}
-	}
-	commit, err := factoryCommit()
-	if err != nil {
-		return err
 	}
 	g, err := os.ReadFile(*graphPath)
 	if err != nil {
@@ -131,7 +127,7 @@ func runEvals(args []string) error {
 				fmt.Fprintf(os.Stderr, "%s: %v\n", j.name, err)
 				r.At, r.Status, r.Reason, r.Pass = cmp.Or(r.At, time.Now()), "error", err.Error(), false
 			}
-			r.Eval, r.Graph, r.Standards, r.Commit = j.name, parsed.Name, hex.EncodeToString(sum[:8]), commit
+			r.Eval, r.Graph, r.Standards = j.name, parsed.Name, hex.EncodeToString(sum[:8])
 			line, _ := json.Marshal(r)
 			mu.Lock()
 			defer mu.Unlock()
@@ -155,24 +151,6 @@ func runEvals(args []string) error {
 	printSummary(results)
 	fmt.Println("results:", out)
 	return nil
-}
-
-// factoryCommit names the code a batch runs on, so results from two
-// versions of the factory never mix.
-func factoryCommit() (string, error) {
-	head, err := exec.Command("git", "rev-parse", "--short", "HEAD").Output()
-	if err != nil {
-		return "", fmt.Errorf("eval records the commit it runs on, and git cannot tell: %w", err)
-	}
-	status, err := exec.Command("git", "status", "--porcelain").Output()
-	if err != nil {
-		return "", err
-	}
-	c := strings.TrimSpace(string(head))
-	if len(status) > 0 {
-		c += "-dirty"
-	}
-	return c, nil
 }
 
 // pollEvery is how often evalOnce reads the run's events. Tests shorten it.
@@ -212,7 +190,7 @@ func evalOnce(store *event.Store, addr, root, dir, g string) (evalResult, error)
 		}
 	}
 	r := evalResult{
-		At: evs[0].At, Run: id, Status: string(st.Status), Reason: st.Reason, CostUSD: st.CostUSD,
+		At: evs[0].At, Run: id, Commit: st.Commit, Status: string(st.Status), Reason: st.Reason, CostUSD: st.CostUSD,
 		Minutes:       evs[len(evs)-1].At.Sub(evs[0].At).Minutes(),
 		Implementer:   st.Rails.Models.Implementer.Model + " at " + st.Rails.Models.Implementer.Effort,
 		ClaudeVersion: claude.Version(),

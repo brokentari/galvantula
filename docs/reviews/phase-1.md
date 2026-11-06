@@ -1,31 +1,31 @@
 # Review: phase-1
 
-Reviewer: claude-sonnet-5-5 at high effort, in a new session. Range: 6189377..c25f963. Date: 2026-11-06. Cost: $0.64.
+Reviewer: claude-sonnet-5-5 at high effort, in a new session. Range: 6189377..4b80b63. Date: 2026-11-06. Cost: $0.54.
 
-What this change does: Phase 1 adds one sandboxed Claude Code agent node. It adds `factory eval`, which starts runs, scores each product with hidden tests and records the results. It also adds a workspace (a git repo with one worktree per agent node), spending limits, usage-limit stops, retry and resume rules, UI cost display, and the first 31-run results file. The last two commits set the $0.50 median-cost limit in the plan and note that the batch must run again on the final code.
+**What this change does:** It finishes phase 1. A Claude Code agent runs inside a bubblewrap sandbox (a Linux tool that hides most of the host from a command), and its work is checked and merged by the runtime. `factory eval` runs the evals through the server and scores each product with hidden tests. The last two commits add a $0.50 median cost limit and make `eval` write the factory commit on each result line. I assumed one developer on one machine, a few runs at a time, as the README says.
 
-I assumed one developer running the server locally and one eval at a time. The server rejects non-localhost Hosts and requires `application/json`, so the no-login API is covered for that load.
+### Should fix
 
-**Should fix**
+1. **The recorded commit is the eval's tree, not the server's** (`cmd/factory/eval.go:L118`, `L124-138`)
+   - **What this is:** `factoryCommit()` runs `git rev-parse` and `git status` where `factory eval` runs. It writes the result into every line. The commit message says this keeps "batches from two versions never mix".
+   - **Problem:** The agent code does not run in the eval process. It runs in `factory serve`, which started earlier and may be on older code. You start the server, edit the executor, then run `factory eval`. Every line says the new commit, but the runs used the old code. The field gives false proof of the exact thing it exists to prove. Nothing tests it either: `TestLostRunsCountAsFailures` only checks that `Commit` is not empty.
+   - **Fix:** Compute the commit once in `serve` and put it in `RunCreatedData`, next to `Guardrails`. `evalOnce` then copies it from the run state, as it already does for `Implementer`. Regenerate `events.ts`. Add a test that the result's commit is the one in the run state.
+   - **If we skip it:** The after-fix batch that phase 1 needs can be recorded as one commit and run on another. You would decide that phase 1 is done from data that cannot be trusted.
 
-1. **Result lines do not say which code made them** (`cmd/factory/eval.go:L28-46`, `L103-109`, `README.md:L8-14`)
-   - **What this is:** Each run adds one line to `evals/results/<date>.jsonl`. The README says the 31 lines came from commit `4f02b54`, and tells you to run the batch again on the final code before phase 1 is done.
-   - **Problem:** A line records the graph name, the standards hash and the Claude version, but not the factory's commit. The file is named by date and opened in append mode. The final batch will almost certainly run today, so it lands in `2026-11-06.jsonl` after the 31 old lines. The file then holds 62 runs from two code versions, and nothing in it tells them apart. The README's "31 runs, commit 4f02b54" and the medians no longer match the file. The done criterion (8 of 10 pass, median under $0.50) would be judged on a mix of old and new runs.
-   - **Fix:** Add a `Commit string` field to `evalResult`. Fill it once per eval with `git rev-parse --short HEAD`, adding `-dirty` if `git status --porcelain` prints anything. The eval already requires the repo root, so git is available. Then move the old 31 lines to a name that shows their commit, or let the README point to the new batch by commit.
-   - **If we skip it:** The final batch cannot be told apart from the first. The proof that phase 1 is done is ambiguous, and someone has to sort it out by hand from timestamps.
+### Nice to have
 
-**Nice to have**
+2. **A second batch on the same day is labelled "-dirty"** (`cmd/factory/eval.go:L138`)
+   - **What this is:** `git status --porcelain` lists untracked files. It reports a change if anything differs from `HEAD`.
+   - **Problem:** The first batch writes `evals/results/<date>.jsonl`, which is untracked until you commit it. The next `factory eval` then sees a change and adds `-dirty` to every line. The label then says nothing about the code.
+   - **Fix:** Add a pathspec to the status call: `git status --porcelain -- . ":!evals/results"`.
+   - **If we skip it:** Results from clean code are labelled `-dirty` until you commit the previous results.
 
-2. **No test for `median`** (`cmd/factory/eval.go:L275-285`)
-   - **What this is:** `median` and `printSummary` produce the "median $" figure that the plan's done criterion uses.
-   - **Problem:** The even-count branch averages two values, and `median` also sorts the caller's slice in place. A slip in either would silently change the number you compare to $0.50. Nothing tests them.
-   - **Fix:** Add a table test of three cases: empty gives 0, `{3,1,2}` gives 2, and `{4,1,3,2}` gives 2.5.
-   - **If we skip it:** A wrong median is unlikely, but nothing would catch one.
+3. **The host's git config can break the runtime's commits** (`internal/workspace/workspace.go:L97-101`)
+   - **What this is:** Every `git` call goes through `Repo.git`. It sets `user.name`, `user.email`, `hooksPath` and `fsmonitor`, but it still reads the user's global config.
+   - **Problem:** If the user has `commit.gpgsign=true`, every `commit` can fail or wait for a passphrase prompt. The runner treats that as an infra failure, retries it, and ends the run after 5.
+   - **Fix:** Add `"-c", "commit.gpgsign=false"` to the same `-c` list. This is one line.
+   - **If we skip it:** Factory runs fail on machines that sign commits, and the error looks like an agent failure.
 
-Prose: I found nothing. The README, plan text, comments and commit messages are plain and active. The numbers in the README status match `evals/results/2026-11-06.jsonl`: 11 wordfreq runs (one trial plus 10), 10 csvq and 10 todo. The medians are about $0.10 to $0.17.
-
-Modern Go: I found no missed guideline. The code uses `encoding/json/v2`, the standard `uuid`, `errors.AsType`, `wg.Go`, `cmp.Or`, `slices.Sorted(maps.Keys(...))` and `strings.Lines`.
-
-Verdict: fix 1 first. It is cheap, and it must be in place before the final batch runs. Item 2 is optional.
-
-Not checked: I could not run anything. The tests that need `bwrap` and a real Claude run were read, not run, and I did not check the Claude cost reported when a session is resumed (whether `total_cost_usd` is for that call or the whole session).
+**Verdict:** fix 1 first. The rest is optional.
+**Lean:** nothing worth cutting.
+**Not checked:** I could not run commands. I did not run the tests or `go fix -diff`, and I did not confirm that the `uuid` import builds on Go 1.27. I found no prose problems.

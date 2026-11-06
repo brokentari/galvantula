@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json/v2"
 	"fmt"
 	"net/http"
@@ -51,9 +52,6 @@ func TestLostRunsCountAsFailures(t *testing.T) {
 		if r.Pass || r.Status != "error" || !strings.Contains(r.Reason, "refused") || r.Eval != "wordfreq" {
 			t.Errorf("got %+v, want a failed wordfreq run with status error", r)
 		}
-		if r.Commit == "" {
-			t.Error("the result does not record the factory's commit")
-		}
 	}
 }
 
@@ -87,7 +85,7 @@ func TestEvalStopsAtUsageLimit(t *testing.T) {
 		id := fmt.Sprintf("r-%d", started.Add(1))
 		g := graph.Graph{Name: "g", Nodes: []graph.Node{{ID: "build", Kind: graph.Agent}}}
 		for _, e := range []event.Event{
-			event.New(id, event.RunCreated, "", 0, event.RunCreatedData{Graph: g, Executor: "claude", Spec: "x"}),
+			event.New(id, event.RunCreated, "", 0, event.RunCreatedData{Graph: g, Executor: "claude", Spec: "x", Commit: "abc1234"}),
 			event.New(id, event.NodeStarted, "build", 1, nil),
 			event.New(id, event.NodeFailed, "build", 1, event.NodeFailedData{Error: "usage limit", Class: event.Limit}),
 			event.New(id, event.RunFinished, "", 0, event.RunFinishedData{Status: event.RunFailed, Reason: "usage limit"}),
@@ -108,9 +106,18 @@ func TestEvalStopsAtUsageLimit(t *testing.T) {
 	if n := started.Load(); n != 1 {
 		t.Errorf("the eval started %d runs, want 1", n)
 	}
+	// The result names the server's code, as the run recorded it.
+	data, err := os.ReadFile(filepath.Join("evals", "results", time.Now().Format(time.DateOnly)+".jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var r evalResult
+	if err := json.Unmarshal(bytes.TrimSpace(data), &r); err != nil || r.Commit != "abc1234" {
+		t.Errorf("result %s (%v); want commit abc1234", data, err)
+	}
 }
 
-// inTempRepo moves to a new git repo that holds what runEvals needs from
+// inTempRepo moves to a new folder that holds what runEvals needs from
 // the repo root.
 func inTempRepo(t *testing.T, repo string) {
 	t.Helper()
@@ -120,10 +127,6 @@ func inTempRepo(t *testing.T, repo string) {
 	}
 	if err := os.CopyFS(filepath.Join("evals", "evalkit"), os.DirFS(filepath.Join(repo, "evals", "evalkit"))); err != nil {
 		t.Fatal(err)
-	}
-	git := "git init -q && git add -A && git -c user.name=t -c user.email=t@localhost commit -q -m start"
-	if out, err := exec.Command("sh", "-c", git).CombinedOutput(); err != nil {
-		t.Fatalf("%v\n%s", err, out)
 	}
 }
 

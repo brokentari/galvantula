@@ -46,6 +46,8 @@ type Runner struct {
 	// Auth is the credential for sandboxed agents:
 	// CLAUDE_CODE_OAUTH_TOKEN=... or ANTHROPIC_API_KEY=...
 	Auth string
+	// Commit names the code this runner runs. Each run records it.
+	Commit string
 
 	wg   sync.WaitGroup
 	mu   sync.Mutex
@@ -140,7 +142,7 @@ func (r *Runner) Start(run Run) (string, error) {
 		return invalid(fmt.Errorf("unknown executor %q", run.Executor))
 	}
 	id := "r-" + strings.ToLower(rand.Text()[:10])
-	data := event.RunCreatedData{Graph: run.Graph, Executor: run.Executor, FakeScript: run.FakeScript, Spec: run.Spec, Guardrails: run.Rails}
+	data := event.RunCreatedData{Graph: run.Graph, Executor: run.Executor, FakeScript: run.FakeScript, Spec: run.Spec, Guardrails: run.Rails, Commit: r.Commit}
 	if _, err := r.store.Append(event.New(id, event.RunCreated, "", 0, data)); err != nil {
 		return "", err
 	}
