@@ -46,6 +46,13 @@ type InfraError struct{ Err error }
 func (e *InfraError) Error() string { return "infra: " + e.Err.Error() }
 func (e *InfraError) Unwrap() error { return e.Err }
 
+// LimitError marks a failure because the account reached its usage limit.
+// The node does not retry, and the run stops.
+type LimitError struct{ Err error }
+
+func (e *LimitError) Error() string { return e.Err.Error() }
+func (e *LimitError) Unwrap() error { return e.Err }
+
 // IsInfra reports whether err is an infrastructure failure.
 func IsInfra(err error) bool {
 	_, ok := errors.AsType[*InfraError](err)

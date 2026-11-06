@@ -112,7 +112,7 @@ export function layout(graph: Graph, colWidth = 205, rowHeight = 84): Map<string
   return pos;
 }
 
-const failureKind = (c: FailureClass) => (c === "infra" ? "infrastructure" : "task");
+const failureKind = (c: FailureClass) => ({ task: "task", infra: "infrastructure", limit: "usage limit" })[c];
 
 export function describe(e: FactoryEvent): string {
   switch (e.type) {

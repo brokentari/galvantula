@@ -2,6 +2,7 @@ package runner
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -342,5 +343,28 @@ func TestRunBudgetStopsNewNodes(t *testing.T) {
 	}
 	if index(evs, event.NodeStarted, "b") >= 0 {
 		t.Error("b started after the budget was spent")
+	}
+}
+
+type limited struct{}
+
+func (limited) Run(context.Context, executor.Task, func(string)) (executor.Result, error) {
+	return executor.Result{}, &executor.LimitError{Err: errors.New("You've hit your usage limit")}
+}
+
+// A usage limit must stop the run at once: a retry cannot help, and must
+// never buy more usage.
+func TestUsageLimitStopsWithoutRetry(t *testing.T) {
+	store := openStore(t)
+	r := New(t.Context(), store, 1)
+	r.Executor = func(*event.State) (executor.Executor, error) { return limited{}, nil }
+	run, err := r.Start(Run{Graph: mustParse(t, "name: g\nnodes:\n  - {id: a, kind: agent, retries: 2}"), Executor: "fake"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, _ := waitUntil(t, store, run, "the run finishes", runDone)
+	a := st.Nodes["a"]
+	if st.Status != event.RunFailed || a.Attempt != 1 || a.LastClass != event.Limit {
+		t.Errorf("run %s, node attempts %d, class %q; want failed after 1 attempt with class limit", st.Status, a.Attempt, a.LastClass)
 	}
 }

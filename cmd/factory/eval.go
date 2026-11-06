@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/brokentari/galvantula/internal/claude"
@@ -43,6 +44,7 @@ type evalResult struct {
 	CostUSD       float64   `json:"cost_usd"`
 	Minutes       float64   `json:"minutes"`
 	Attempts      int       `json:"attempts"`
+	Limited       bool      `json:"limited,omitzero"` // stopped by the account's usage limit
 }
 
 // runEvals runs each eval n times through the server, scores each product
@@ -53,7 +55,7 @@ func runEvals(args []string) error {
 	dbPath := fs.String("db", "factory.db", "the server's event log, read to follow each run")
 	runsDir := fs.String("runs", "runs", "the server's runs folder, where the products are")
 	n := fs.Int("n", 10, "runs per eval")
-	parallel := fs.Int("parallel", 3, "runs at the same time")
+	parallel := fs.Int("parallel", 1, "runs at the same time")
 	graphPath := fs.String("graph", "graphs/phase1.yaml", "graph to run")
 	fs.Parse(args)
 	if fs.NArg() == 0 {
@@ -96,12 +98,19 @@ func runEvals(args []string) error {
 		results []evalResult
 		wg      sync.WaitGroup
 		slots   = make(chan struct{}, max(*parallel, 1))
+		limited atomic.Bool // the account reached its usage limit: start no more runs
 	)
 	for _, j := range jobs {
 		wg.Go(func() {
 			slots <- struct{}{}
 			defer func() { <-slots }()
+			if limited.Load() {
+				return
+			}
 			r, err := evalOnce(store, *addr, root, j.dir, string(g))
+			if r.Limited {
+				limited.Store(true)
+			}
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "%s: %v\n", j.name, err)
 				return
@@ -124,6 +133,9 @@ func runEvals(args []string) error {
 		})
 	}
 	wg.Wait()
+	if limited.Load() {
+		fmt.Println("stopped: the account reached its usage limit; the runs left were not started")
+	}
 	printSummary(results)
 	fmt.Println("results:", out)
 	return nil
@@ -160,9 +172,11 @@ func evalOnce(store *event.Store, addr, root, dir, g string) (evalResult, error)
 		ClaudeVersion: claude.Version(),
 	}
 	for _, n := range st.Graph.Nodes {
+		ns := st.Nodes[n.ID]
 		if n.Kind == graph.Agent {
-			r.Attempts += st.Nodes[n.ID].Attempt
+			r.Attempts += ns.Attempt
 		}
+		r.Limited = r.Limited || ns.LastClass == event.Limit
 	}
 	if st.Status != event.RunSucceeded {
 		return r, nil

@@ -338,6 +338,10 @@ func (r *Runner) complete(st *event.State, emit func(event.Event) error, o outco
 func (r *Runner) fail(st *event.State, emit func(event.Event) error, n graph.Node, attempt int, err error, cost float64) error {
 	ns := st.Nodes[n.ID]
 	d := event.NodeFailedData{Error: err.Error(), Class: event.Task, CostUSD: cost}
+	if _, ok := errors.AsType[*executor.LimitError](err); ok {
+		d.Class = event.Limit // WillRetry stays false: retrying cannot help, and must not buy usage
+		return emit(event.New(st.Run, event.NodeFailed, n.ID, attempt, d))
+	}
 	if executor.IsInfra(err) {
 		d.Class = event.Infra
 		d.WillRetry = ns.InfraFailures+1 < maxInfraFailures

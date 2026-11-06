@@ -13,7 +13,7 @@ export interface DecideRequest {
 
 export type EventType = "gate_decided" | "gate_waiting" | "graph_updated" | "node_failed" | "node_log" | "node_started" | "node_succeeded" | "run_created" | "run_finished";
 
-export type FailureClass = "task" | "infra";
+export type FailureClass = "task" | "infra" | "limit";
 
 export interface GateDecidedData {
   approved: boolean;

@@ -29,6 +29,7 @@ func TestRunResults(t *testing.T) {
 		{"success", `echo '{"type":"system","subtype":"init"}'; echo '{"type":"result","subtype":"success","is_error":false,"result":"done","total_cost_usd":0.5,"session_id":"s1"}'`, ""},
 		{"model error", `echo '{"type":"result","subtype":"error_max_turns","is_error":true,"result":"boom"}'`, "error_max_turns: boom"},
 		{"not JSON", `echo 'claude: bad flag' >&2; exit 2`, "claude: bad flag"},
+		{"usage limit", `echo '{"type":"result","is_error":true,"result":"You have hit your usage limit · resets 5pm"}'`, "usage limit reached"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

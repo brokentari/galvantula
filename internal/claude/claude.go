@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -41,6 +42,18 @@ type Options struct {
 	Exec func(ctx context.Context, name string, args ...string) *exec.Cmd
 	// Log receives one short line for each step the session takes.
 	Log func(line string)
+}
+
+// ErrUsageLimit means the account reached its plan's usage limit. Trying
+// again soon only fails again, and must never buy more usage.
+var ErrUsageLimit = errors.New("usage limit reached")
+
+// limitPhrases appear in claude's message when the account hits a limit.
+var limitPhrases = []string{"usage limit", "spend limit", "usage credits", "out of credits", "hit your"}
+
+func isLimit(msg string) bool {
+	msg = strings.ToLower(msg)
+	return slices.ContainsFunc(limitPhrases, func(p string) bool { return strings.Contains(msg, p) })
 }
 
 // ErrNoResult means claude stopped without a result: it crashed, could not
@@ -117,6 +130,9 @@ func Run(ctx context.Context, o Options) (Result, error) {
 		// A cancel kills the process, and Wait reports "signal: killed".
 		// Report the cancel instead, so callers do not treat it as a crash.
 		return r, fmt.Errorf("claude -p: %w", context.Cause(ctx))
+	}
+	if (r.IsError && isLimit(r.Text)) || (!found && isLimit(stderr.String())) {
+		return r, fmt.Errorf("%w: %s", ErrUsageLimit, strings.TrimSpace(r.Text+" "+stderr.String()))
 	}
 	if !found {
 		return r, fmt.Errorf("%w: %w; stderr: %s", ErrNoResult, cmp.Or(runErr, errors.New("no result line")), strings.TrimSpace(stderr.String()))

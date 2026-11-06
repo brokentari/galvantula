@@ -86,6 +86,8 @@ const (
 	Task FailureClass = "task"
 	// Infra failures (crash, restart, rate limit) do not.
 	Infra FailureClass = "infra"
+	// Limit failures mean the account reached its usage limit. They never retry.
+	Limit FailureClass = "limit"
 )
 
 type NodeFailedData struct {
@@ -250,9 +252,10 @@ func (s *State) Apply(e Event) error {
 		if err != nil {
 			return err
 		}
-		if d.Class == Infra {
+		switch d.Class {
+		case Infra:
 			n.InfraFailures++
-		} else {
+		case Task:
 			n.TaskFailures++
 		}
 		n.LastError, n.LastClass = d.Error, d.Class

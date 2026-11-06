@@ -47,7 +47,7 @@ var enums = map[reflect.Type][]string{
 	reflect.TypeFor[event.Type]():         strs(slices.Sorted(maps.Keys(event.Payloads))...),
 	reflect.TypeFor[event.NodeStatus]():   strs(event.Pending, event.Running, event.Waiting, event.Succeeded, event.Failed),
 	reflect.TypeFor[event.RunStatus]():    strs(event.RunRunning, event.RunSucceeded, event.RunFailed),
-	reflect.TypeFor[event.FailureClass](): strs(event.Task, event.Infra),
+	reflect.TypeFor[event.FailureClass](): strs(event.Task, event.Infra, event.Limit),
 }
 
 // renames avoids vague names in TypeScript.

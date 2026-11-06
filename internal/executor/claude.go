@@ -169,6 +169,8 @@ func (c Claude) agent(ctx context.Context, repo workspace.Repo, t Task, log func
 		return spent, err // the runner is stopping
 	case errors.Is(err, context.DeadlineExceeded):
 		return spent, fmt.Errorf("the agent ran past %s", limit)
+	case errors.Is(err, claude.ErrUsageLimit):
+		return spent, &LimitError{Err: err}
 	case errors.Is(err, claude.ErrNoResult):
 		return spent, &InfraError{Err: err}
 	case err != nil:
