@@ -1,9 +1,8 @@
-// Command todo is the reference answer to evals/todo/spec.md. It exists to
-// check the hidden tests; the factory never sees it.
+// Command todo keeps a to-do list in a JSON file.
 package main
 
 import (
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
 	"flag"
 	"fmt"
@@ -21,124 +20,129 @@ type item struct {
 	Done bool   `json:"done"`
 }
 
+// list keeps the last id it gave out, so rm never frees an id for reuse.
 type list struct {
-	NextID int    `json:"next_id"`
+	LastID int    `json:"last_id"`
 	Items  []item `json:"items"`
 }
 
-func usage(msg string) {
-	fmt.Fprintln(os.Stderr, "todo:", msg)
+func main() { os.Exit(run(os.Args[1:])) }
+
+func usage() {
 	fmt.Fprintln(os.Stderr, "usage: todo [--file path] add <text...> | list [--all] | done <id> | rm <id>")
-	os.Exit(2)
 }
 
-func fail(err error) {
-	fmt.Fprintln(os.Stderr, "todo:", err)
-	os.Exit(1)
-}
-
-func load(path string) list {
-	l := list{NextID: 1}
-	data, err := os.ReadFile(path)
-	if errors.Is(err, fs.ErrNotExist) {
-		return l
+func run(args []string) int {
+	flags := flag.NewFlagSet("todo", flag.ContinueOnError)
+	flags.Usage = usage
+	path := flags.String("file", "todo.json", "path of the list file")
+	if flags.Parse(args) != nil {
+		return 2
 	}
+	if flags.NArg() == 0 {
+		usage()
+		return 2
+	}
+	l, err := load(*path)
 	if err != nil {
-		fail(err)
+		fmt.Fprintln(os.Stderr, "todo:", err)
+		return 1
 	}
-	if err := json.Unmarshal(data, &l); err != nil {
-		fail(fmt.Errorf("%s: %w", path, err))
-	}
-	return l
-}
-
-func save(path string, l list) {
-	data, err := json.MarshalIndent(l, "", "  ")
-	if err != nil {
-		fail(err)
-	}
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".todo-*")
-	if err != nil {
-		fail(err)
-	}
-	_, err = tmp.Write(data)
-	err = errors.Join(err, tmp.Close())
-	if err == nil {
-		err = os.Rename(tmp.Name(), path)
-	}
-	if err != nil {
-		os.Remove(tmp.Name())
-		fail(err)
-	}
-}
-
-func id(args []string) int {
-	if len(args) != 1 {
-		usage("need exactly one id")
-	}
-	n, err := strconv.Atoi(args[0])
-	if err != nil {
-		usage("id must be a number: " + args[0])
-	}
-	return n
-}
-
-func find(l list, n int) int {
-	i := slices.IndexFunc(l.Items, func(it item) bool { return it.ID == n })
-	if i < 0 {
-		fail(fmt.Errorf("no item %d", n))
-	}
-	return i
-}
-
-func main() {
-	path := flag.String("file", "todo.json", "list file")
-	flag.Parse()
-	if flag.NArg() == 0 {
-		usage("missing subcommand")
-	}
-	cmd, args := flag.Arg(0), flag.Args()[1:]
-
+	cmd, rest := flags.Arg(0), flags.Args()[1:]
 	switch cmd {
 	case "add":
-		text := strings.Join(args, " ")
+		text := strings.Join(rest, " ")
 		if text == "" {
-			usage("add needs text")
+			fmt.Fprintln(os.Stderr, "todo: add needs text")
+			return 2
 		}
-		l := load(*path)
-		l.Items = append(l.Items, item{ID: l.NextID, Text: text})
-		l.NextID++
-		save(*path, l)
-		fmt.Println("added", l.NextID-1)
+		l.LastID++
+		l.Items = append(l.Items, item{ID: l.LastID, Text: text})
+		return commit(*path, l, fmt.Sprint("added ", l.LastID))
 	case "list":
-		fl := flag.NewFlagSet("list", flag.ContinueOnError)
-		all := fl.Bool("all", false, "show done items too")
-		if err := fl.Parse(args); err != nil || fl.NArg() > 0 {
-			usage("list takes only --all")
+		lf := flag.NewFlagSet("list", flag.ContinueOnError)
+		lf.Usage = usage
+		all := lf.Bool("all", false, "show done items too")
+		if lf.Parse(rest) != nil {
+			return 2
 		}
-		for _, it := range load(*path).Items {
+		// Items stay in id order: add appends the next id and rm keeps the order.
+		for _, it := range l.Items {
 			switch {
-			case !*all && !it.Done:
-				fmt.Println(it.ID, it.Text)
+			case *all && it.Done:
+				fmt.Printf("%d [x] %s\n", it.ID, it.Text)
 			case *all:
-				mark := map[bool]string{false: "[ ]", true: "[x]"}[it.Done]
-				fmt.Println(it.ID, mark, it.Text)
+				fmt.Printf("%d [ ] %s\n", it.ID, it.Text)
+			case !it.Done:
+				fmt.Printf("%d %s\n", it.ID, it.Text)
 			}
 		}
-	case "done":
-		n := id(args)
-		l := load(*path)
-		l.Items[find(l, n)].Done = true
-		save(*path, l)
-		fmt.Println("done", n)
-	case "rm":
-		n := id(args)
-		l := load(*path)
-		i := find(l, n)
-		l.Items = slices.Delete(l.Items, i, i+1)
-		save(*path, l)
-		fmt.Println("removed", n)
-	default:
-		usage("unknown subcommand " + cmd)
+		return 0
+	case "done", "rm":
+		if len(rest) != 1 {
+			usage()
+			return 2
+		}
+		id, err := strconv.Atoi(rest[0])
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "todo: id %q is not a number\n", rest[0])
+			return 2
+		}
+		i := slices.IndexFunc(l.Items, func(it item) bool { return it.ID == id })
+		if i < 0 {
+			fmt.Fprintf(os.Stderr, "todo: no item with id %d\n", id)
+			return 1
+		}
+		if cmd == "rm" {
+			l.Items = slices.Delete(l.Items, i, i+1)
+			return commit(*path, l, fmt.Sprint("removed ", id))
+		}
+		l.Items[i].Done = true
+		return commit(*path, l, fmt.Sprint("done ", id))
 	}
+	fmt.Fprintf(os.Stderr, "todo: unknown subcommand %q\n", cmd)
+	usage()
+	return 2
+}
+
+// load reads the list at path. A missing file is an empty list.
+func load(path string) (list, error) {
+	var l list
+	data, err := os.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return l, nil
+	}
+	if err == nil {
+		err = json.Unmarshal(data, &l)
+	}
+	return l, err
+}
+
+// commit saves l to path, prints msg and returns the exit status.
+func commit(path string, l list, msg string) int {
+	if err := save(path, l); err != nil {
+		fmt.Fprintln(os.Stderr, "todo:", err)
+		return 1
+	}
+	fmt.Println(msg)
+	return 0
+}
+
+// save writes a temporary file next to path and renames it over path, so a
+// crash leaves the old list or the new one, never half of one.
+func save(path string, l list) error {
+	data, err := json.Marshal(l)
+	if err != nil {
+		return err
+	}
+	f, err := os.CreateTemp(filepath.Dir(path), ".todo-*.tmp")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(f.Name()) // fails harmlessly after a successful rename
+	_, err = f.Write(data)
+	if err = errors.Join(err, f.Sync(), f.Close()); err != nil {
+		return err
+	}
+	return os.Rename(f.Name(), path)
 }

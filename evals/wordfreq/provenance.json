@@ -1,0 +1,11 @@
+{
+  "spec_sha256": "8f4109a7459f49ed14abc1f7428127ae4701a61337f12eb441a8af422c2db33d",
+  "model": "claude-opus-5-5",
+  "effort": "xhigh",
+  "claude_version": "2.1.318 (Claude Code)",
+  "generated_at": "2026-11-06T04:43:05.284729834Z",
+  "attempts": 1,
+  "cost_usd": 0.9936394000000002,
+  "tests": 17,
+  "stub_failures": 16
+}

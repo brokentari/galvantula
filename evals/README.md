@@ -1,31 +1,51 @@
 # Evals
 
-Each eval is a one-paragraph spec and a set of hidden acceptance tests. The
-factory gets only `spec.md`. It never sees `hidden/` or `reference/`.
+Each eval is a one-paragraph spec plus hidden acceptance tests. The evals
+measure the factory: after you change a prompt, a model or the graph, run the
+evals and compare the pass rate, cost and time with the last run.
 
 ```
 evals/<name>/
-  spec.md      the input to the factory
-  hidden/      black-box tests: they build ./cmd/<name> and check its output and exit codes
-  reference/   a known-good answer that exists only to check the tests
+  spec.md          the only file the factory sees
+  hidden/          black-box tests: they build ./cmd/<name> and check its output and exit codes
+  reference/       a known-good answer that proves the tests right
+  assumptions.md   where the spec is unclear, and how the tests treat each case
+  provenance.json  which model wrote the tests, at what effort, from which spec, and at what cost
 ```
 
-Run the hidden tests against a product the factory built:
+## Who writes the tests
+
+A model writes them, not a person, and not a model that builds products.
+`go run ./cmd/evalgen evals/<name>` gives `spec.md` to the `eval_author`
+model in `guardrails.yaml`. That model writes the hidden tests, the reference
+and `assumptions.md`. `guardrails.yaml` refuses an `eval_author` that any
+builder role also uses, so the tests do not share the builders' blind spots.
+
+evalgen does not trust the model's report. It keeps the result only if:
+
+- every test passes on the reference;
+- at least 80% of the tests fail on a program that does nothing, so most tests check real behavior;
+- `gofmt`, `go vet` and `go fix -diff` report nothing.
+
+If a check fails, evalgen sends the failure back to the model, up to two times.
+
+To change what an eval checks, edit `spec.md` and run evalgen again. Do not
+edit `hidden/` or `reference/` by hand. If `assumptions.md` lists a gap that
+matters, close it in the spec.
+
+## Run the hidden tests
+
+Against a product the factory built:
 
 ```
 EVAL_PRODUCT=/path/to/product go test ./evals/wordfreq/hidden
 ```
 
-Without `EVAL_PRODUCT`, the tests run against `reference/`. So
-`go test ./evals/...` checks the tests themselves. Each test must also fail
-against a program that does nothing. The only exceptions are tests that
-expect empty output.
+Without `EVAL_PRODUCT`, the tests run against `reference/`, so
+`go test ./evals/...` checks the tests themselves.
 
 | eval | size | what it tests |
 |---|---|---|
 | `wordfreq` | one package | flags, stdin or files, Unicode words, sorting with ties, exit codes |
 | `todo` | one package, saved state | subcommands, JSON file, ids that are never reused, atomic writes |
 | `csvq` | several packages | filter, stable sort, limit, select, CSV and JSON output, error lines |
-
-These tests are a first draft. Read them and change them until they say
-exactly what you mean, because the eval scores are only as good as the tests.

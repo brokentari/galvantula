@@ -3,6 +3,7 @@
 //	factory serve    [-addr :7070] [-db factory.db] [-ui ui/dist] [-workers 3]
 //	factory start    [-server http://localhost:7070] -fake script.yaml graph.yaml
 //	factory validate graph.yaml...
+//	factory standards [-guardrails guardrails.yaml] [-o AGENTS.md]
 package main
 
 import (
@@ -22,14 +23,17 @@ import (
 
 	"github.com/brokentari/galvantula/internal/event"
 	"github.com/brokentari/galvantula/internal/graph"
+	"github.com/brokentari/galvantula/internal/guardrails"
 	"github.com/brokentari/galvantula/internal/runner"
 	"github.com/brokentari/galvantula/internal/server"
+	"github.com/brokentari/galvantula/standards"
 )
 
 const usage = `usage:
   factory serve    [-addr :7070] [-db factory.db] [-ui ui/dist] [-workers 3]
   factory start    [-server http://localhost:7070] -fake script.yaml graph.yaml
-  factory validate graph.yaml...`
+  factory validate graph.yaml...
+  factory standards [-guardrails guardrails.yaml] [-o AGENTS.md]`
 
 func main() {
 	if len(os.Args) < 2 {
@@ -44,6 +48,8 @@ func main() {
 		err = start(args)
 	case "validate":
 		err = validate(args)
+	case "standards":
+		err = writeStandards(args)
 	default:
 		fmt.Fprintln(os.Stderr, usage)
 		os.Exit(2)
@@ -146,4 +152,37 @@ func validate(paths []string) error {
 		fmt.Println(p, "ok")
 	}
 	return errors.Join(errs...)
+}
+
+// writeStandards prints the standards block, or writes it into a file: in
+// place of the old block if the file has one, or as the whole file if it
+// does not exist yet.
+func writeStandards(args []string) error {
+	fs := flag.NewFlagSet("standards", flag.ExitOnError)
+	rails := fs.String("guardrails", "guardrails.yaml", "settings file with the target Go version")
+	out := fs.String("o", "", "file to write; stdout if empty")
+	fs.Parse(args)
+	g, err := guardrails.Load(*rails)
+	if err != nil {
+		return err
+	}
+	block, err := standards.Render(g.Go.Version)
+	if err != nil {
+		return err
+	}
+	if *out == "" {
+		fmt.Print(block)
+		return nil
+	}
+	doc, err := os.ReadFile(*out)
+	if errors.Is(err, os.ErrNotExist) {
+		return os.WriteFile(*out, []byte(block), 0o644)
+	}
+	if err != nil {
+		return err
+	}
+	if doc, err = standards.Replace(doc, block); err != nil {
+		return fmt.Errorf("%s: %w", *out, err)
+	}
+	return os.WriteFile(*out, doc, 0o644)
 }

@@ -105,6 +105,12 @@ review:
   prose: true                  # Orwell group; counts as should
 tests:
   agent_tests: in-scope        # new _test.go files in the node's own packages
+models:                        # one model per role; the eval author must build nothing
+  architect:   { model: claude-sonnet-5-5, effort: high }
+  planner:     { model: claude-sonnet-5-5, effort: high }
+  implementer: { model: claude-sonnet-5-5, effort: medium }
+  reviewer:    { model: claude-sonnet-5-5, effort: high }
+  eval_author: { model: claude-opus-5-5,   effort: xhigh }
 sources:
   ponytail:  { repo: DietrichGebert/ponytail,             commit: 96608e078b2d5ea607c5c3b8b5a54d1c1fba6846 }
   go-modern: { repo: JetBrains/go-modern-guidelines,      commit: 155dc7ca10da5e1f6c841503086957b1b37f5815 }
@@ -170,7 +176,7 @@ claude --bare -p "$(cat brief.md)" \
 
 **Retries:** the first retry resumes the session with `--resume "$NODE_SESSION"` and the failing output, which is cheap because the context is already there. The second retry starts a new session, which escapes a bad approach.
 
-The planner uses `--json-schema`, so Claude Code checks the DAG's shape before the runtime's own validator runs. The planner and the architect can use a stronger model than the implementers.
+The planner uses `--json-schema`, so Claude Code checks the DAG's shape before the runtime's own validator runs. Each role's model and effort come from `guardrails.yaml`.
 
 Bare mode uses `ANTHROPIC_API_KEY`, so runs bill at API rates.
 
@@ -225,6 +231,8 @@ bwrap --unshare-all --share-net --die-with-parent --clearenv \
 
 ## Phases
 
+Each phase ends with a standards review. `phasereview` asks the reviewer model, in a new session, to review the phase's code and prose against ponytail-review, the modern Go guidelines and the Orwell rules. The phase is done when the verdict is "Ship." and the report is committed in `docs/reviews/`.
+
 0. **skeleton — Graph, event log, scheduler.** Graph types loaded from `graphs/*.yaml`, a validator, the scheduler, the SQLite event log, gates, and a FakeExecutor. A minimal UI: the graph, node states, a log tail, and approve buttons. Write the first 3 eval specs and their hidden tests.
    **Done when** a fake run with fan-out, a retry and a gate plays back in the UI. If you kill the runtime in the middle of a run, it resumes from the log. No LLM yet.
 1. **loop — One sandboxed agent node.** ClaudeCodeExecutor in bubblewrap, in one worktree. The standards node and `guardrails.yaml`. The check is build, vet, `go fix -diff` and test against your tests, plus the frozen-file hashes. Add the retry policy, budgets and timeouts.
@@ -242,7 +250,7 @@ bwrap --unshare-all --share-net --die-with-parent --clearenv \
 
 ## Keep an eval set from phase 0 on
 
-Five to ten specs in `evals/<name>/spec.md`, each with acceptance tests you wrote yourself. The factory never sees these tests. They are separate from the architect's tests, and they check whether the architect understood the spec.
+Five to ten specs in `evals/<name>/spec.md`, each with hidden acceptance tests and a reference answer. `evalgen` writes them with the `eval_author` model, which the factory never builds with, and keeps them only if they pass on the reference and fail on a program that does nothing. The factory never sees these tests. They are separate from the architect's tests, and they check whether the architect understood the spec.
 
 - For every run, record: pass on hidden tests, cost, wall-clock time, retries, replans, the graph version, the standards version, and the review findings in each group with the `Lean: -N` line count.
 - `factory eval --graph graphs/v2.yaml` runs the set and compares it with the last baseline, so you can tell whether a change to the graph helped.

@@ -46,12 +46,32 @@ Use **Replay** and the slider to step through any run, event by event.
 | `internal/server` | HTTP API and the server-sent event stream |
 | `cmd/factory` | `serve`, `start`, `validate` |
 | `cmd/gen-ts` | writes `ui/src/gen/events.ts` from the Go types |
+| `cmd/evalgen`, `cmd/phasereview` | eval test authoring and phase reviews, through headless Claude Code (`internal/claude`) |
+| `standards/` | the pinned skills and the renderer for the standards block |
 | `ui/` | Vite, React and React Flow |
 | `evals/` | eval specs with hidden tests; see [evals/README.md](evals/README.md) |
 
 The event log is the only state. Each event records the runtime's decisions,
 such as whether a failed node will retry. So the UI's fold (`ui/src/state.ts`)
 is a plain mapping with no rules of its own.
+
+## Standards and models
+
+`AGENTS.md` holds the rules every agent follows here, and `CLAUDE.md`
+imports it. Its standards block comes from pinned copies of three skills in
+`standards/vendor/`: ponytail (least code), go-modern-guidelines (modern Go)
+and orwell-writing (plain English). Phase 1's standards node writes the same
+block into every product.
+
+`guardrails.yaml` sets the target Go version and the model and effort for each
+role. Sonnet 5.5 builds. Opus 5.5 writes the eval tests, and it is never a
+builder.
+
+| command | what it does |
+|---|---|
+| `go run ./cmd/factory standards -o AGENTS.md` | rewrites the standards block |
+| `go run ./cmd/evalgen evals/<name>` | writes an eval's hidden tests with the eval author model, then checks them |
+| `go run ./cmd/phasereview -phase phase-N -base <ref>` | a new session with the reviewer model reviews a phase; see `AGENTS.md` |
 
 ## Checks
 

@@ -1,0 +1,9 @@
+[
+  {"name": "ponytail", "repo": "DietrichGebert/ponytail", "commit": "96608e078b2d5ea607c5c3b8b5a54d1c1fba6846", "path": "LICENSE", "sha256": "fb1bc6909ac3ef82d5c22106e32ef682b0cff66788fa915fb9b53b15c9d2f3ab"},
+  {"name": "ponytail", "repo": "DietrichGebert/ponytail", "commit": "96608e078b2d5ea607c5c3b8b5a54d1c1fba6846", "path": ".agents/rules/ponytail.md", "sha256": "ca99e5958383063029b206c7c50a0eaad1c29914a362bedd46033ec16b537e1e"},
+  {"name": "ponytail", "repo": "DietrichGebert/ponytail", "commit": "96608e078b2d5ea607c5c3b8b5a54d1c1fba6846", "path": "skills/ponytail-review/SKILL.md", "sha256": "33fe4ebe22a460924e5d4a261e223df22e409cc94ab76182bee9fb91a3ef022e"},
+  {"name": "go-modern", "repo": "JetBrains/go-modern-guidelines", "commit": "155dc7ca10da5e1f6c841503086957b1b37f5815", "path": "LICENSE", "sha256": "304264c63c5fb4cf3bc22746f1fd8958fc34f69cf1a389f7c7b2182985691bfd"},
+  {"name": "go-modern", "repo": "JetBrains/go-modern-guidelines", "commit": "155dc7ca10da5e1f6c841503086957b1b37f5815", "path": "internal/guidelines/guidelines.json", "sha256": "00022da18c37c19d3c5a42dfaccb07d3a58d518a6e72f85bed551cb27f797240"},
+  {"name": "orwell", "repo": "tamdogood/builder-essential-skills", "commit": "1be9984bdafbb68eaff400bdd82773a1d41ee7ec", "path": "LICENSE", "sha256": "97dbe732aed41de02960c1498ffa0c6716330db36d6e4dcac66c998c9dc89ade"},
+  {"name": "orwell", "repo": "tamdogood/builder-essential-skills", "commit": "1be9984bdafbb68eaff400bdd82773a1d41ee7ec", "path": "skills/orwell-writing/SKILL.md", "sha256": "228e2df4143dba900098142d255bdda8f74a61bd650306e2ce1488b3aa8f1d88"}
+]

@@ -1,0 +1,14 @@
+# Settings the factory reads at the start of each run. Phase 0 uses go and
+# models; phase 1 adds deps, review and tests (see Software Factory Plan.md).
+go:
+  version: "1.27" # the go line in each product's go.mod; also filters the Go guidelines
+
+# Which model plays each role, and how hard it thinks. The eval author writes
+# the hidden tests that judge the factory, so it must be a model the factory
+# does not use for anything else.
+models:
+  architect:   { model: claude-sonnet-5-5, effort: high }
+  planner:     { model: claude-sonnet-5-5, effort: high }
+  implementer: { model: claude-sonnet-5-5, effort: medium }
+  reviewer:    { model: claude-sonnet-5-5, effort: high }
+  eval_author: { model: claude-opus-5-5,   effort: xhigh }
