@@ -54,6 +54,16 @@ func TestLostRunsCountAsFailures(t *testing.T) {
 	}
 }
 
+// Outside the repo root, the hidden tests cannot be scored. The eval must
+// stop before it pays for any run.
+func TestEvalNeedsRepoRoot(t *testing.T) {
+	t.Chdir(t.TempDir())
+	err := runEvals([]string{"-server", "http://127.0.0.1:1", "evals/wordfreq"})
+	if err == nil || !strings.Contains(err.Error(), "repo root") {
+		t.Fatalf("got %v, want an error about the repo root", err)
+	}
+}
+
 // After one run reaches the account's usage limit, the eval must start no
 // more runs: each one would buy more usage.
 func TestEvalStopsAtUsageLimit(t *testing.T) {

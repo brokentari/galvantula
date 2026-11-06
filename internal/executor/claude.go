@@ -16,6 +16,7 @@ import (
 	"uuid"
 
 	"github.com/brokentari/galvantula/internal/claude"
+	"github.com/brokentari/galvantula/internal/gotest"
 	"github.com/brokentari/galvantula/internal/graph"
 	"github.com/brokentari/galvantula/internal/guardrails"
 	"github.com/brokentari/galvantula/internal/sandbox"
@@ -175,7 +176,9 @@ func (c Claude) agent(ctx context.Context, repo workspace.Repo, t Task, log func
 		return spent, err // the runner is stopping
 	case errors.Is(err, context.DeadlineExceeded):
 		// shortcut: a killed agent leaves no result line with its cost, so charge
-		// the most one attempt may spend. Add up the stream's token usage if this overcounts.
+		// the most one attempt may spend. A crash (ErrNoResult) charges nothing,
+		// because claude may not have started. Add up the stream's token usage if
+		// either guess proves wrong.
 		spent.CostUSD = c.Rails.Budget.NodeUSD
 		return spent, fmt.Errorf("the agent ran past %s", limit)
 	case errors.Is(err, claude.ErrUsageLimit):
@@ -281,7 +284,7 @@ func (c Claude) check(ctx context.Context, repo workspace.Repo, wt string) error
 		out, err := sandbox.Command(ctx, box, step[0], step[1:]...).CombinedOutput()
 		quiet := step[0] == "gofmt" // gofmt lists files to fix and still exits 0
 		if err != nil || (quiet && len(out) > 0) {
-			errs = append(errs, fmt.Errorf("%s:\n%s", strings.Join(step, " "), tail(string(out), 40)))
+			errs = append(errs, fmt.Errorf("%s:\n%s", strings.Join(step, " "), gotest.Tail(string(out), 40)))
 		}
 	}
 	return errors.Join(errs...)
@@ -316,9 +319,4 @@ func claudeBin() (string, error) {
 		return "", err
 	}
 	return filepath.EvalSymlinks(p)
-}
-
-func tail(s string, lines int) string {
-	parts := strings.Split(strings.TrimSpace(s), "\n")
-	return strings.Join(parts[max(len(parts)-lines, 0):], "\n")
 }

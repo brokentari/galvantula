@@ -1,10 +1,16 @@
-// Package gotest reads the output of go test -json.
+// Package gotest reads the output of go test and the other go tools.
 package gotest
 
 import (
 	"encoding/json/v2"
 	"strings"
 )
+
+// Tail returns the last lines of a tool's output, for an error message.
+func Tail(s string, lines int) string {
+	parts := strings.Split(strings.TrimSpace(s), "\n")
+	return strings.Join(parts[max(len(parts)-lines, 0):], "\n")
+}
 
 // Count counts the top-level tests that passed and failed, and returns the
 // tests' text output. Build errors are not JSON, so it keeps them as text.

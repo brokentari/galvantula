@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 // fakeClaude puts a shell script named claude first on PATH.
@@ -95,6 +96,14 @@ EOS
 	want := []string{"I will write the file.", "Write: main.go", "Bash: go test ./..."}
 	if !slices.Equal(lines, want) {
 		t.Errorf("log = %q, want %q", lines, want)
+	}
+}
+
+// A long log line is cut by rune, so a character is never split.
+func TestShortKeepsCharactersWhole(t *testing.T) {
+	got := short(strings.Repeat("é", 201))
+	if !utf8.ValidString(got) || !strings.HasSuffix(got, "…") || utf8.RuneCountInString(got) != 201 {
+		t.Errorf("short = %q, want 200 é and …", got)
 	}
 }
 

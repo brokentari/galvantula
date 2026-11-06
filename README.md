@@ -37,10 +37,10 @@ Use **Replay** and the slider to step through any run, event by event.
 
 ## Run a real agent
 
-Agents need Linux with bubblewrap (`bwrap`), and Go at `/usr/bin/go`. The
-sandbox shows only `/usr`, `/etc` and the agent's own folders, and finds
-commands only in `/usr/bin`. The
-sandbox cannot see your home folder, so agents need their own credential.
+Agents need Linux with bubblewrap (`bwrap`), and Go at `/usr/bin/go` and
+`/usr/bin/gofmt`. The sandbox shows only `/usr`, `/etc` and the agent's own
+folders, and finds commands only in `/usr/bin`. The sandbox cannot see your
+home folder, so agents need their own credential.
 Create one with `claude setup-token` (it uses your Claude subscription), or
 use an API key:
 

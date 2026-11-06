@@ -282,7 +282,7 @@ func check(work, name string, kit []byte, p *provenance) error {
 func testCounts(dir string, env []string, pkg string) (passed, failed int, output string) {
 	out, _ := goCmd(dir, env, "test", "-count=1", "-json", pkg)
 	passed, failed, text := gotest.Count(out)
-	return passed, failed, tail(text, 60)
+	return passed, failed, gotest.Tail(text, 60)
 }
 
 // install moves the generated files into the repo, fixing import paths on
@@ -395,11 +395,6 @@ func run(dir string, env []string, name string, args ...string) (string, error) 
 	}), env...)
 	out, err := cmd.CombinedOutput()
 	return string(out), err
-}
-
-func tail(s string, lines int) string {
-	parts := strings.Split(strings.TrimSpace(s), "\n")
-	return strings.Join(parts[max(len(parts)-lines, 0):], "\n")
 }
 
 func firstLine(err error) string {
