@@ -13,7 +13,8 @@ func Tail(s string, lines int) string {
 }
 
 // Count counts the top-level tests that passed and failed, and returns the
-// tests' text output. Build errors are not JSON, so it keeps them as text.
+// tests' text output. A skipped test counts as failed: it did not show that
+// the code works. Build errors are not JSON, so Count keeps them as text.
 func Count(out string) (passed, failed int, text string) {
 	var b strings.Builder
 	for line := range strings.Lines(out) {
@@ -33,7 +34,7 @@ func Count(out string) (passed, failed int, text string) {
 		switch e.Action {
 		case "pass":
 			passed++
-		case "fail":
+		case "fail", "skip":
 			failed++
 		}
 	}

@@ -8,6 +8,8 @@ func TestCount(t *testing.T) {
 		out            string
 		passed, failed int
 	}{
+		{"skip counts as failed", `{"Action":"pass","Test":"TestA"}
+{"Action":"skip","Test":"TestB"}`, 1, 1},
 		{"mixed", `{"Action":"run","Test":"TestA"}
 {"Action":"pass","Test":"TestA"}
 {"Action":"pass","Test":"TestA/sub"}

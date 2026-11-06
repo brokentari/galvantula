@@ -108,7 +108,7 @@ func serve(args []string) error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	// Holding the port, this is the only server, so no attempt is using a cache.
+	// This server holds the port, so it is the only server and no attempt is using a cache.
 	if err := os.RemoveAll(executor.BuildCaches(root)); err != nil {
 		ln.Close()
 		return err
