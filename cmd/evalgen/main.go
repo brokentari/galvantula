@@ -4,6 +4,10 @@
 // evalgen then checks the work itself: the tests must pass on the reference,
 // fail on a program that does nothing, and pass vet, gofmt and go fix.
 //
+// The model runs go test on code it wrote, on this machine, with no sandbox
+// (phase 1 adds one). If ANTHROPIC_API_KEY is set, that code can read it, so
+// use a key with a low spend limit. evalgen's own checks run without it.
+//
 //	go run ./cmd/evalgen [-guardrails guardrails.yaml] [-retries 2] evals/wordfreq ...
 package main
 
@@ -22,6 +26,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -96,6 +101,11 @@ func main() {
 }
 
 func generate(ctx context.Context, g guardrails.Guardrails, dir string, retries int, budget float64) error {
+	// The in-place test runs ./<dir>/hidden from the repo root, so check the
+	// path before spending money on the model.
+	if !filepath.IsLocal(dir) {
+		return fmt.Errorf("give the eval as a path inside this repo, such as evals/wordfreq")
+	}
 	dir = filepath.Clean(dir)
 	name := filepath.Base(dir)
 	spec, err := os.ReadFile(filepath.Join(dir, "spec.md"))
@@ -380,10 +390,14 @@ func goCmd(dir string, env []string, args ...string) (string, error) {
 	return run(dir, append(env, "GOFLAGS=-buildvcs=false"), "go", args...)
 }
 
+// run runs a command on code the model wrote, so it leaves the API key out
+// of the environment.
 func run(dir string, env []string, name string, args ...string) (string, error) {
 	cmd := exec.Command(name, args...)
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), env...)
+	cmd.Env = append(slices.DeleteFunc(os.Environ(), func(kv string) bool {
+		return strings.HasPrefix(kv, "ANTHROPIC_API_KEY=")
+	}), env...)
 	out, err := cmd.CombinedOutput()
 	return string(out), err
 }

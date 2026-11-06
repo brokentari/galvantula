@@ -143,7 +143,7 @@ func (g Graph) Validate() error {
 }
 
 // checkAcyclic removes nodes with no remaining deps until none are left.
-// Whatever cannot be removed is on a cycle.
+// Whatever cannot be removed is on a cycle or depends on one.
 func (g Graph) checkAcyclic() error {
 	waiting := make(map[string]int, len(g.Nodes))
 	users := make(map[string][]string)
@@ -172,7 +172,7 @@ func (g Graph) checkAcyclic() error {
 		return nil
 	}
 	stuck := slices.Sorted(maps.Keys(waiting))
-	return fmt.Errorf("graph has a cycle through: %s", strings.Join(stuck, ", "))
+	return fmt.Errorf("graph has a cycle, or nodes that depend on one: %s", strings.Join(stuck, ", "))
 }
 
 // dependsOn reports whether node id reaches ancestor by following deps.

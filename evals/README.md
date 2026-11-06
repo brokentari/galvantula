@@ -29,6 +29,10 @@ evalgen checks the model's work itself. It keeps the result only if:
 
 If a check fails, evalgen sends the failure back to the model, up to two times.
 
+The model runs `go test` on code it wrote, on your machine, with no sandbox
+until phase 1 adds one. If `ANTHROPIC_API_KEY` is set, that code can read it,
+so use a key with a low spend limit.
+
 To change what an eval checks, edit `spec.md` and run evalgen again. Do not
 edit `hidden/` or `reference/` by hand. If `assumptions.md` lists a gap that
 matters, close it in the spec.
