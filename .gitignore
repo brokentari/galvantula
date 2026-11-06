@@ -1,0 +1,6 @@
+/factory
+*.db
+*.db-wal
+*.db-shm
+ui/node_modules/
+ui/dist/

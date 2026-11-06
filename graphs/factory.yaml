@@ -1,0 +1,46 @@
+# The outer factory graph. You write it by hand; the plan node fills the
+# "tasks" slot with the task DAG at run time.
+# Phase 0 leaves out the fix node and replanning; they come in phases 2 and 4.
+name: factory
+nodes:
+  - id: standards
+    title: Write AGENTS.md from the pinned skills
+    kind: tool
+
+  - id: architect
+    title: Interfaces and acceptance tests
+    kind: agent
+    deps: [standards]
+    retries: 2
+
+  - id: approve-contract
+    title: Approve the contract
+    kind: gate
+    deps: [architect]
+
+  - id: plan
+    title: Emit the task DAG
+    kind: plan
+    deps: [approve-contract]
+    retries: 1
+
+  - id: approve-dag
+    title: Approve the DAG and its cost
+    kind: gate
+    deps: [plan]
+
+  - id: tasks
+    title: Generated task DAG
+    kind: slot
+    filled_by: plan
+    deps: [approve-dag]
+
+  - id: verify
+    title: Full suite with -race
+    kind: tool
+    deps: [tasks]
+
+  - id: review
+    title: ponytail-review, advisory
+    kind: agent
+    deps: [verify]
