@@ -88,6 +88,22 @@ func TestInstall(t *testing.T) {
 	})
 }
 
+// If moving the old parts aside stops halfway, putting them back must not
+// delete the parts that never moved.
+func TestPutBackAfterHalfMove(t *testing.T) {
+	dir, old := t.TempDir(), t.TempDir()
+	must(t, writeFiles(dir, map[string][]byte{"reference/main.go": []byte("ref"), "assumptions.md": []byte("notes")}))
+	must(t, writeFiles(old, map[string][]byte{"hidden/x_test.go": []byte("test")}))
+
+	must(t, putBack(dir, old, nil, []string{"hidden"}))
+	for path, want := range map[string]string{"hidden/x_test.go": "test", "reference/main.go": "ref", "assumptions.md": "notes"} {
+		got, err := os.ReadFile(filepath.Join(dir, path))
+		if err != nil || string(got) != want {
+			t.Errorf("%s = %q, %v; want %q", path, got, err, want)
+		}
+	}
+}
+
 func must(t *testing.T, err error) {
 	t.Helper()
 	if err != nil {

@@ -24,7 +24,7 @@ nodes:
     deps: [approve-contract]
     retries: 1
 
-  - id: approve-dag
+  - id: approve-tasks
     title: Approve the task graph and its cost
     kind: gate
     deps: [plan]
@@ -33,7 +33,7 @@ nodes:
     title: Generated task graph
     kind: slot
     filled_by: plan
-    deps: [approve-dag]
+    deps: [approve-tasks]
 
   - id: verify
     title: Full suite with -race

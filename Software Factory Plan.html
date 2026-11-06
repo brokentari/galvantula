@@ -144,11 +144,6 @@ svg { color: var(--ink); font-family: var(--font-body); }
   grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
   gap: 16px;
 }
-.grid5 {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
-  gap: 12px;
-}
 .grid3 {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
@@ -529,8 +524,8 @@ ul.rules li b { color: var(--ink); font-weight: 600; }
 
 <section>
   <h2>Node kinds</h2>
-  <p>The runtime knows five kinds of node. Each kind has one executor. The factory graph is made from these and nothing else.</p>
-  <div class="grid5">
+  <p>The runtime knows six kinds of node. Each kind has one executor. The factory graph is made from these and nothing else.</p>
+  <div class="grid3">
     <div class="card">
       <span class="dir">agent</span>
       <h3>Claude Code in a worktree</h3>
@@ -555,6 +550,11 @@ ul.rules li b { color: var(--ink); font-weight: 600; }
       <span class="dir">plan</span>
       <h3>Agent that emits graph</h3>
       <p>Its output must match a JSON schema and pass the graph rules below before it becomes part of the graph.</p>
+    </div>
+    <div class="card">
+      <span class="dir">slot</span>
+      <h3>Placeholder</h3>
+      <p>Marks where a plan node's task graph goes. The plan's output replaces it, so it never runs.</p>
     </div>
   </div>
 </section>

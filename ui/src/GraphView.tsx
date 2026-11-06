@@ -26,8 +26,9 @@ function Card({ data }: NodeProps<Node<CardData>>) {
 const nodeTypes = { card: Card };
 
 export function GraphView({ run, selected, onSelect }: { run: RunView; selected?: string; onSelect: (id: string) => void }) {
+  // The layout depends only on the graph, which changes only when a plan adds nodes.
+  const pos = useMemo(() => layout(run.graph), [run.graph]);
   const { nodes, edges } = useMemo(() => {
-    const pos = layout(run.graph);
     const nodes: Node<CardData>[] = run.graph.nodes.map((n) => ({
       id: n.id,
       type: "card",
@@ -44,7 +45,7 @@ export function GraphView({ run, selected, onSelect }: { run: RunView; selected?
       })),
     );
     return { nodes, edges };
-  }, [run, selected]);
+  }, [run, pos, selected]);
 
   return (
     <ReactFlow

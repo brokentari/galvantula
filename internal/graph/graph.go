@@ -29,7 +29,7 @@ const (
 // Kinds lists every valid Kind.
 var Kinds = []Kind{Agent, Tool, Gate, Merge, Plan, Slot}
 
-// Graph is a named set of nodes. Deps make it a DAG.
+// Graph is a named set of nodes. Deps order the nodes; a cycle is an error.
 type Graph struct {
 	Name  string `yaml:"name" json:"name"`
 	Nodes []Node `yaml:"nodes" json:"nodes"`

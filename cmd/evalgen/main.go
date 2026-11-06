@@ -309,29 +309,54 @@ func install(work, dir, name string, runTests func(dir string) error) error {
 	if err := os.Mkdir(old, 0o755); err != nil {
 		return err
 	}
-	if err := swap(dir, old); err != nil {
-		return errors.Join(err, swap(old, dir))
+	aside, err := moveParts(dir, old)
+	if err != nil {
+		return errors.Join(err, putBack(dir, old, nil, aside))
 	}
-	if err := swap(fresh, dir); err != nil {
-		return errors.Join(err, swap(old, dir))
+	installed, err := moveParts(fresh, dir)
+	if err != nil {
+		return errors.Join(err, putBack(dir, old, installed, aside))
 	}
 	if err := runTests(dir); err != nil {
-		return errors.Join(fmt.Errorf("tests fail in place, so the old tests are back: %w", err), swap(old, dir))
+		return errors.Join(fmt.Errorf("tests fail in place, so the old tests are back: %w", err), putBack(dir, old, installed, aside))
 	}
 	return nil
 }
 
-// swap moves each generated part from one folder to another, replacing what is there.
-func swap(from, to string) error {
-	for _, part := range []string{"hidden", "reference", "assumptions.md"} {
+// parts are the generated files and folders of one eval.
+var parts = []string{"hidden", "reference", "assumptions.md"}
+
+// moveParts moves each part that exists in from into to, replacing what is
+// there, and returns the parts it moved.
+func moveParts(from, to string) ([]string, error) {
+	var moved []string
+	for _, part := range parts {
+		src := filepath.Join(from, part)
+		if _, err := os.Lstat(src); errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
 		if err := os.RemoveAll(filepath.Join(to, part)); err != nil {
-			return err
+			return moved, err
 		}
-		if err := os.Rename(filepath.Join(from, part), filepath.Join(to, part)); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			return err
+		if err := os.Rename(src, filepath.Join(to, part)); err != nil {
+			return moved, err
 		}
+		moved = append(moved, part)
 	}
-	return nil
+	return moved, nil
+}
+
+// putBack removes the new parts from dir and moves the old ones back. It
+// touches only the parts that install moved.
+func putBack(dir, old string, installed, aside []string) error {
+	var errs []error
+	for _, part := range installed {
+		errs = append(errs, os.RemoveAll(filepath.Join(dir, part)))
+	}
+	for _, part := range aside {
+		errs = append(errs, os.Rename(filepath.Join(old, part), filepath.Join(dir, part)))
+	}
+	return errors.Join(errs...)
 }
 
 func copyTree(src, dst string) error {

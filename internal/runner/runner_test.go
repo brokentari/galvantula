@@ -108,7 +108,7 @@ func TestFactoryDemoRun(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	st, _ := waitUntil(t, store, run, "the DAG gate waits", nodeIs("approve-dag", event.Waiting))
+	st, _ := waitUntil(t, store, run, "the task-graph gate waits", nodeIs("approve-tasks", event.Waiting))
 	for _, id := range []string{"pkg-store", "pkg-api", "cmd-cli"} {
 		if _, ok := st.Graph.Node(id); !ok {
 			t.Errorf("plan output %s is not in the graph", id)
@@ -117,7 +117,7 @@ func TestFactoryDemoRun(t *testing.T) {
 	if _, ok := st.Graph.Node("tasks"); ok {
 		t.Error("the tasks slot is still in the graph")
 	}
-	if err := r.Decide(run, "approve-dag", true, "looks right"); err != nil {
+	if err := r.Decide(run, "approve-tasks", true, "looks right"); err != nil {
 		t.Fatal(err)
 	}
 

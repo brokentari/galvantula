@@ -38,7 +38,7 @@ You write the outer graph by hand, as a file. The standards node runs first and 
 
 ## Node kinds
 
-The runtime knows five kinds of node. Each kind has one executor. The factory graph is made from these and nothing else.
+The runtime knows six kinds of node. Each kind has one executor. The factory graph is made from these and nothing else.
 
 | kind | what it is | how it finishes |
 |---|---|---|
@@ -47,6 +47,7 @@ The runtime knows five kinds of node. Each kind has one executor. The factory gr
 | gate | waits for you | approve or reject from the UI or the MCP tool; a reject carries your notes back to the node before it |
 | merge | runtime git | commits a node's diff and merges it into the integration branch in dependency order; a conflict counts as a failure of that node |
 | plan | agent that emits graph | output must match a JSON schema and pass the graph rules before it becomes part of the graph |
+| slot | placeholder | marks where a plan node's task graph goes; the plan's output replaces it, so it never runs |
 
 ## Rules for parallel work
 

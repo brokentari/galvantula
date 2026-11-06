@@ -1,43 +1,43 @@
 # Review: phase-0
 
-Reviewer: claude-sonnet-5-5 at high effort, in a new session. Range: start..7a87216. Date: 2026-11-06. Cost: $0.77.
+Reviewer: claude-sonnet-5-5 at high effort, in a new session. Range: start..ee32346. Date: 2026-11-06. Cost: $0.78.
 
-What this change does: this is the whole phase-0 skeleton, plus five rounds of review fixes. It has a Go runtime with a SQLite event log, a fake executor, an HTTP/SSE server and a React UI. It also has the eval generator (`evalgen`), the phase reviewer (`phasereview`) and the vendored standards. I assumed one developer on localhost, with no real load. I read the diff only and did not run anything.
+**What this change does:** This is the finished phase 0 of the software factory. A Go runtime runs a graph of work from an event log, with a fake executor and a React UI. Support tools sit around it: `evalgen` has a model write hidden eval tests, `phasereview` has a model review the code, and `claude.Run` runs headless Claude Code. The last six commits fix earlier review findings, such as the Host check, the JSON-only bodies, binding the port before resuming runs, and cancel handling in `claude.Run`.
+
+I assumed one developer on localhost, a few runs at a time, and the fake executor only.
 
 ## Must fix
 
-None. I traced the scheduler, resume and retry logic, the plan-node event, the gate flow and the SSE reconnect, and found no bug. I also checked the Host and Content-Type guards, the `evalgen` install and restore, and the `countTests` and `verdict` parsers. All of them hold.
+None.
 
 ## Should fix
 
-1. **The `%w` fix in `claude.Run` does not let callers tell a cancel from a crash** (`internal/claude/claude.go`, the error paths after `cmd.Run()`)
-   - **What this is:** The last commit says the error is now wrapped "so callers can tell a cancel from a crash".
-   - **Problem:** `exec.CommandContext` kills the child on cancel. `Wait` then returns `signal: killed`, not `context.Canceled`. Go swaps in the context error only when the process exited cleanly. So `errors.Is(err, context.Canceled)` is false on a real cancel, and no test covers it. Today both callers pass `context.Background()`, so nothing breaks yet.
-   - **Fix:** Check the context before parsing the output: `if ctx.Err() != nil { return r, fmt.Errorf("claude -p: %w", context.Cause(ctx)) }`. Add one test with a fake `claude` script on `PATH` and a cancelled context.
-   - **If we skip it:** The next caller with a real cancel (the phase 1 executor) will treat a cancel as a crash and retry it.
+1. **The "keep the old tests" step can delete them** (`cmd/evalgen/main.go`, `install` and `swap`)
+   - **What this is:** `install` moves the old `hidden`, `reference` and `assumptions.md` into a side folder. It moves the new ones in, runs the tests, and moves the old ones back if anything fails.
+   - **Problem:** The restore path is `swap(old, dir)`. For each part it first runs `RemoveAll(dir/part)`, and only then renames `old/part`. Suppose the first `swap(dir, old)` fails after moving only `hidden`, for example because `reference` cannot be renamed. The restore moves `hidden` back. Then it deletes the `reference` that never moved, and `assumptions.md` too. The `ErrNotExist` from the missing source is ignored, so the loss is silent.
+   - **Fix:** In the first error path, move back only the parts that exist in `old/`. Check that `old/part` exists before `RemoveAll(dir/part)`. Keep the current behavior for the later error paths, which must remove the new files. Add a test where the first move fails halfway.
+   - **If we skip it:** The failure is rare, and git has the committed files. But the step that promises to keep the old tests can delete them on the failure it was built for.
 
-2. **The "bind the port before resuming runs" guard has no test** (`cmd/factory/main.go`, `serve`)
-   - **What this is:** A second `factory serve` must stop before it resumes runs that the first server is driving. Otherwise two processes append events to the same runs.
-   - **Problem:** The guard depends only on the order of two statements, and nothing fails if someone swaps them. Running two drivers on one run causes double-started nodes and a corrupt log.
-   - **Fix:** `serve(args []string) error` is already callable. Seed a temp DB with an unfinished run and hold a listener on a port. Call `serve([]string{"-addr", ln.Addr().String(), "-db", db, "-ui", ""})`. Assert it returns an error and that the DB has no new events.
-   - **If we skip it:** A tidy-up refactor can silently bring the double-driver bug back.
+2. **Prose: the plan says "five kinds of node", but the code has six** (`Software Factory Plan.md`, "Node kinds"; the same text in the `.html`; `internal/graph/graph.go:L18-27`)
+   - **What this is:** The plan says "The runtime knows five kinds of node... The factory graph is made from these and nothing else." Its table lists agent, tool, gate, merge and plan.
+   - **Problem:** `graph.Kinds` also holds `slot`. `graphs/factory.yaml` uses it for `tasks`. A reader who follows the plan will not know what `kind: slot` is.
+   - **Fix:** Say "six kinds". Add a `slot` row to the table: "placeholder in the graph that a plan node's output replaces". Change both the `.md` and the `.html`.
+   - **If we skip it:** The plan and the code disagree about the core vocabulary.
+
+3. **Prose: "DAG" is still in the code, the node id and the UI** (`internal/graph/graph.go:L35`, `graphs/factory.yaml`, `internal/runner/runner_test.go`)
+   - **What this is:** Commit 6 set one term, "task graph". The fifth fix said to explain "DAG" at first use.
+   - **Problem:** The comment "Deps make it a DAG." has no explanation. The node id `approve-dag` shows on the UI card and in the event list. The runner test says "the DAG gate waits". The node's title already says "task graph".
+   - **Fix:** Rename the id to `approve-tasks`. Update the `Decide` calls and wait messages in `runner_test.go`. Change the comment to "Deps order the nodes; a cycle is an error."
+   - **If we skip it:** The same thing has two names, and the UI shows the jargon one.
 
 ## Nice to have
 
-3. **Two copies of the plan** (`Software Factory Plan.md`, `Software Factory Plan.html`)
-   - **What this is:** The `.md` file says it has "the same text" as the HTML. That is 263 lines of prose to keep in step with 868 lines of HTML.
-   - **Problem:** The two files must change together, and they have already drifted. One says "Retry edges have caps" and the other says "Dashed edges have caps".
-   - **Fix:** Keep only the HTML, which has the diagrams. Point the README link at it.
-   - **If we skip it:** Each plan edit needs two changes, and the files will disagree over time.
+4. **Every log line rebuilds the whole graph view** (`ui/src/App.tsx`, `useEvents`; `ui/src/GraphView.tsx`)
+   - **What this is:** Each new event creates a new `run` object and a new events array.
+   - **Problem:** `GraphView` recomputes the layout and every node for each event, including log lines that change only one node's text. `[...s.events, e]` also copies the whole array each time. With a real executor and thousands of `go test` lines, this becomes slow.
+   - **Fix:** Memoize the layout on `run.graph` and `run.graphVersion` only. Pass node views to the cards separately from the layout.
+   - **If we skip it:** Phase 0's fake run is unaffected. A long real run will make the UI sluggish.
 
-## Prose
+**Verdict: fix 1, 2 and 3 first.**
 
-4. **The same thing has two names, and "infra" is jargon**
-   - **What this is:** The last commit says "task graph" in the graph titles and explains "DAG" at first use.
-   - **Problem:** `graphs/factory.yaml` still titles the slot "Generated task DAG". Both plan files use "DAG" and "task graph" for the same thing: "approve DAG + cost", "emit DAG", "back to DAG approval", "A DAG is accepted only if". The UI shows "infra" as a bare word (`ui/src/NodePanel.tsx`, `· N infra`; `ui/src/state.ts`, `infra failure`). The plan says "infrastructure failures". The Orwell and STE rules ask for one term per thing and everyday words.
-   - **Fix:** Pick "task graph". Change the slot title, the figure labels and the plan text to it. Keep "DAG" only in the one explaining sentence. Write "infrastructure" in the UI text, or "not the node's fault".
-   - **If we skip it:** Readers must guess that "DAG" and "task graph" are the same thing.
-
-Verdict: fix 1, 2 and 4 first.
-Lean: -263 lines possible.
-Not checked: I did not run the tests or the `go fix` check. `evalgen` runs the model's code with your full environment and no sandbox, so keep `ANTHROPIC_API_KEY` in mind when you run it.
+**Not checked:** I did not run any command or test. I did not verify the `claude` flags `--permission-prompts` and `--safe-mode`. I only skimmed the model-written eval tests. `evalgen` lets the model run `go test` and `go run` on the host with no sandbox. That is a known gap in the plan, and phase 1's sandbox covers it.
