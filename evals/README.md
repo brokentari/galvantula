@@ -53,3 +53,6 @@ Without `EVAL_PRODUCT`, the tests run against `reference/`, so
 | `wordfreq` | one package | flags, stdin or files, Unicode words, sorting with ties, exit codes |
 | `todo` | one package, saved state | subcommands, JSON file, ids that are never reused, atomic writes |
 | `csvq` | several packages | filter, stable sort, limit, select, CSV and JSON output, error lines |
+| `dedupe` | one package | repeats anywhere in the input, `-i`, `-c`, `-d`, `-u`, several files |
+| `calc` | one package | a parser: precedence, signs, `^` and `%`, number formatting, error positions |
+| `logq` | four packages named in the spec | log line parser, filters, three output formats, exit codes; the spec asks for four packages so that the planner has parallel work |

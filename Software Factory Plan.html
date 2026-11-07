@@ -814,7 +814,8 @@ factory_logs(node_id)     → transcript</pre>
       <div class="phase-head">
         <span class="layer">generated graph</span>
         <h3>Planner emits the task graph</h3>
-        <p class="build">A schema-checked task graph, the task-graph gate with a cost estimate, write scopes, parallel sandboxed worktrees, and merges into the integration branch after each node.</p>
+        <p class="build">The graph is <code>graphs/phase3.yaml</code>. After the contract gate, the planner reads the contract and answers with a task graph as JSON. Each task has an id, a title, a scope and its deps. The scope is the package directories the task may write. The runtime refuses a plan that has more than 6 tasks, a chain of more than 4, a package with no owner or two owners, or a scope outside the contract.</p>
+        <p class="build">You approve the task graph at a second gate. The log lists each task and a ceiling on what one attempt of each costs. The runtime puts the tasks where the slot is. Tasks with no dependency between them run at the same time, each in its own worktree. A task may write only directly in its own package directories and to its own notes file, and its check runs only its own packages' tests. The runtime merges each task into main after its check passes. The merges are one at a time, and a conflict aborts and names the task.</p>
       </div>
       <p class="done"><b>Done when</b>A multi-package Go CLI builds from one paragraph, with 2 or more nodes running at the same time and no merge conflicts.</p>
     </li>

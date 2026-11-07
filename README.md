@@ -5,17 +5,11 @@ comes out. A Go runtime owns a graph of work. Claude Code runs each agent
 node. A React UI shows each run live. The full plan is in
 [Software Factory Plan.html](Software%20Factory%20Plan.html).
 
-**Status: phase 2 (the pipeline) is done.** It passed its standards review
-(`docs/reviews/phase-2.md`, verdict "Ship." after 7 rounds). On the final code
-(commit 073ce17), with no human at the gate, the hidden tests passed in all 5
-evals: `wordfreq`, `todo`, `csvq`, `dedupe` and `calc`, one run each
-(`evals/results/2026-11-07-073ce17.jsonl`). Each run cost $0.35 to $0.80 by
-Claude Code's estimate at API prices, not a charge on a plan, and took 2.7 to
-5.3 minutes. An earlier batch on commit 83d02fb passed 4 of 5: `calc` failed
-when the architect wrote a wrong test, which no later node may change. The
-contract gate is meant to catch that, and an eval has no human to do it.
-Phase 1 (one sandboxed agent) and phase 0 passed their reviews too
-(`docs/reviews/`).
+**Status: phase 3 (the planner and parallel tasks) is built and waits for its
+review and its eval runs.** Phase 2 (the pipeline), phase 1 (one sandboxed
+agent) and phase 0 passed their standards reviews (`docs/reviews/`). The
+latest results are in `evals/results/`. The costs in them are Claude Code's
+estimates at API prices, not charges on a plan.
 
 ## Run the demo
 
@@ -63,6 +57,12 @@ the acceptance tests and `CONTRACT.md`; you approve the contract at a gate
 the stubs and may not change the tests; a read-only review and a fix answer
 its findings; verify runs the whole suite with the race detector. Add
 `-auto-approve` to `factory start` to skip the gate, as the evals do.
+
+`graphs/phase3.yaml` adds a planner after the contract gate. It splits the
+work into tasks, one per group of packages. You approve the task graph at a
+second gate (evals skip it with `-auto-approve`). Tasks that do not depend on
+each other run at the same time, each in its own worktree, and the runtime
+merges each into main when its check passes.
 
 Each run's product is a git repo in `runs/<run>/repo`. The agent works in
 `runs/<run>/nodes/<node>`; the runtime commits and merges its work after the
