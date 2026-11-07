@@ -63,6 +63,9 @@ type RunCreatedData struct {
 	Spec       string                `json:"spec,omitempty"`
 	Guardrails guardrails.Guardrails `json:"guardrails,omitzero"`
 	Commit     string                `json:"commit,omitempty"` // the server's code, with -dirty for uncommitted changes
+	// AutoApprove makes the runtime approve every gate itself, as eval runs
+	// need, since no human is there. The decision's notes say so.
+	AutoApprove bool `json:"auto_approve,omitempty"`
 }
 
 // GraphUpdatedData is also how a plan node succeeds; CostUSD is that attempt's cost.
@@ -95,7 +98,9 @@ type NodeFailedData struct {
 	Error     string       `json:"error"`
 	Class     FailureClass `json:"class"`
 	WillRetry bool         `json:"will_retry"`
-	CostUSD   float64      `json:"cost_usd,omitzero"`
+	// Abandoned means an advisory node failed for good. It counts as done, and the run goes on.
+	Abandoned bool    `json:"abandoned,omitempty"`
+	CostUSD   float64 `json:"cost_usd,omitzero"`
 }
 
 type GateDecidedData struct {
@@ -164,17 +169,18 @@ type NodeState struct {
 
 // State is a run as its events describe it.
 type State struct {
-	Run        string
-	Graph      graph.Graph
-	Executor   string
-	FakeScript string
-	Spec       string
-	Rails      guardrails.Guardrails
-	Commit     string
-	CostUSD    float64
-	Status     RunStatus
-	Reason     string
-	Nodes      map[string]*NodeState
+	Run         string
+	Graph       graph.Graph
+	Executor    string
+	FakeScript  string
+	Spec        string
+	Rails       guardrails.Guardrails
+	Commit      string
+	AutoApprove bool
+	CostUSD     float64
+	Status      RunStatus
+	Reason      string
+	Nodes       map[string]*NodeState
 }
 
 func (s *State) spend(n *NodeState, usd float64) {
@@ -202,7 +208,7 @@ func (s *State) Apply(e Event) error {
 			return err
 		}
 		*s = State{Run: e.Run, Graph: d.Graph, Executor: d.Executor, FakeScript: d.FakeScript,
-			Spec: d.Spec, Rails: d.Guardrails, Commit: d.Commit, Status: RunRunning, Nodes: map[string]*NodeState{}}
+			Spec: d.Spec, Rails: d.Guardrails, Commit: d.Commit, AutoApprove: d.AutoApprove, Status: RunRunning, Nodes: map[string]*NodeState{}}
 		for _, n := range d.Graph.Nodes {
 			s.Nodes[n.ID] = &NodeState{Status: Pending}
 		}
@@ -265,8 +271,11 @@ func (s *State) Apply(e Event) error {
 		n.LastError, n.LastClass = d.Error, d.Class
 		s.spend(n, d.CostUSD)
 		n.Status = Failed
-		if d.WillRetry {
+		switch {
+		case d.WillRetry:
 			n.Status = Pending
+		case d.Abandoned:
+			n.Status = Succeeded
 		}
 	case GateWaiting:
 		n.Status = Waiting

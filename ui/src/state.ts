@@ -65,12 +65,12 @@ export function apply(run: RunView | undefined, e: FactoryEvent): RunView | unde
     case "node_failed":
       next = {
         ...n,
-        status: e.data.will_retry ? "pending" : "failed",
+        status: e.data.will_retry ? "pending" : e.data.abandoned ? "succeeded" : "failed",
         lastError: e.data.error,
         taskFailures: n.taskFailures + (e.data.class === "task" ? 1 : 0),
         infraFailures: n.infraFailures + (e.data.class === "infra" ? 1 : 0),
         costUSD: n.costUSD + (e.data.cost_usd ?? 0),
-        logs: [...n.logs, `✗ ${failureKind(e.data.class)} failure: ${e.data.error}${e.data.will_retry ? " (will retry)" : ""}`],
+        logs: [...n.logs, `✗ ${failureKind(e.data.class)} failure: ${e.data.error}${e.data.will_retry ? " (will retry)" : e.data.abandoned ? " (advisory: the run goes on)" : ""}`],
       };
       break;
     case "gate_waiting":

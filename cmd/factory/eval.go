@@ -168,7 +168,7 @@ func evalOnce(store *event.Store, addr, root, dir, g string) (evalResult, error)
 	if err != nil {
 		return evalResult{}, err
 	}
-	id, err := startRun(addr, server.StartRequest{Graph: g, Executor: "claude", Spec: string(spec)})
+	id, err := startRun(addr, server.StartRequest{Graph: g, Executor: "claude", Spec: string(spec), AutoApprove: true})
 	if err != nil {
 		return evalResult{}, err
 	}

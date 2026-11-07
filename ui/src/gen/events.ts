@@ -36,6 +36,8 @@ export interface GraphNode {
   deps?: string[];
   retries?: number;
   filled_by?: string;
+  role?: string;
+  advisory?: boolean;
 }
 
 export interface GraphUpdatedData {
@@ -74,6 +76,7 @@ export interface NodeFailedData {
   error: string;
   class: FailureClass;
   will_retry: boolean;
+  abandoned?: boolean;
   cost_usd?: number;
 }
 
@@ -99,6 +102,7 @@ export interface RunCreatedData {
   spec?: string;
   guardrails?: Guardrails;
   commit?: string;
+  auto_approve?: boolean;
 }
 
 export interface RunFinishedData {

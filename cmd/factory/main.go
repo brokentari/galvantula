@@ -186,6 +186,7 @@ func start(args []string) error {
 	addr := fs.String("server", "http://localhost:7070", "factory server")
 	fake := fs.String("fake", "", "play this fake executor script")
 	spec := fs.String("spec", "", "build this spec with Claude Code")
+	auto := fs.Bool("auto-approve", false, "approve every gate without asking; for evals")
 	fs.Parse(args)
 	if fs.NArg() != 1 || (*fake == "") == (*spec == "") {
 		return errors.New("start needs one graph file and either -fake script.yaml or -spec spec.md")
@@ -194,7 +195,7 @@ func start(args []string) error {
 	if err != nil {
 		return err
 	}
-	req := server.StartRequest{Graph: string(g), Executor: "fake"}
+	req := server.StartRequest{Graph: string(g), Executor: "fake", AutoApprove: *auto}
 	file := *fake
 	if *spec != "" {
 		req.Executor, file = "claude", *spec

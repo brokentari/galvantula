@@ -70,6 +70,15 @@ func (r Repo) Changed(dir string) ([]string, error) {
 	return names(out), err
 }
 
+// Tracked lists the files that git tracks in dir.
+func (r Repo) Tracked(dir string) ([]string, error) {
+	out, err := r.git(dir, "ls-files")
+	if err != nil || out == "" {
+		return nil, err
+	}
+	return strings.Split(out, "\n"), nil
+}
+
 // NewFiles lists files in dir that git does not track yet, ignored or not.
 func (r Repo) NewFiles(dir string) ([]string, error) {
 	out, err := r.git(dir, "ls-files", "--others", "-z")

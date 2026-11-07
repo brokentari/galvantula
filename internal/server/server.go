@@ -42,6 +42,8 @@ type StartRequest struct {
 	Executor   string `json:"executor"`
 	FakeScript string `json:"fake_script,omitempty"` // YAML
 	Spec       string `json:"spec,omitempty"`        // markdown
+	// AutoApprove makes the runtime approve every gate. Use it for evals only.
+	AutoApprove bool `json:"auto_approve,omitempty"`
 }
 
 // DecideRequest is the body of POST /api/runs/{run}/gates/{node}.
@@ -106,7 +108,7 @@ func (s *server) startRun(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
 		return
 	}
-	id, err := s.runner.Start(runner.Run{Graph: g, Executor: req.Executor, FakeScript: req.FakeScript, Spec: req.Spec, Rails: s.rails})
+	id, err := s.runner.Start(runner.Run{Graph: g, Executor: req.Executor, FakeScript: req.FakeScript, Spec: req.Spec, Rails: s.rails, AutoApprove: req.AutoApprove})
 	switch {
 	case errors.Is(err, runner.ErrInvalid):
 		http.Error(w, err.Error(), http.StatusUnprocessableEntity)

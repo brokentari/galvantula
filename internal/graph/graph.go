@@ -43,6 +43,19 @@ type Node struct {
 	Deps     []string `yaml:"deps" json:"deps,omitempty"`
 	Retries  int      `yaml:"retries" json:"retries,omitzero"`
 	FilledBy string   `yaml:"filled_by" json:"filled_by,omitempty"`
+	// Role says what an agent or tool node does. The executor picks its
+	// instructions and its check by role. An agent with no role builds the
+	// whole spec; a tool node with no role uses its id.
+	Role string `yaml:"role" json:"role,omitempty"`
+	// Advisory nodes cannot fail the run: if one fails for good, the run goes on.
+	// A review and the fix that follows it are advisory; the tests decide the outcome.
+	Advisory bool `yaml:"advisory" json:"advisory,omitzero"`
+}
+
+// Roles lists the valid roles of each kind of node.
+var Roles = map[Kind][]string{
+	Agent: {"builder", "architect", "implementer", "reviewer", "fixer"},
+	Tool:  {"standards", "verify"},
 }
 
 var idPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
@@ -88,6 +101,12 @@ func (g Graph) Validate() error {
 		byID[n.ID] = n
 		if !slices.Contains(Kinds, n.Kind) {
 			errs = append(errs, fmt.Errorf("node %q: unknown kind %q", n.ID, n.Kind))
+		}
+		if n.Role != "" && !slices.Contains(Roles[n.Kind], n.Role) {
+			errs = append(errs, fmt.Errorf("node %q: role %q is not valid for a %s node", n.ID, n.Role, n.Kind))
+		}
+		if n.Advisory && n.Kind != Agent {
+			errs = append(errs, fmt.Errorf("node %q: only agent nodes may be advisory", n.ID))
 		}
 		if n.Retries < 0 {
 			errs = append(errs, fmt.Errorf("node %q: retries must not be negative", n.ID))

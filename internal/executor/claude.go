@@ -19,6 +19,7 @@ import (
 	"github.com/brokentari/galvantula/internal/gotest"
 	"github.com/brokentari/galvantula/internal/graph"
 	"github.com/brokentari/galvantula/internal/guardrails"
+	"github.com/brokentari/galvantula/internal/review"
 	"github.com/brokentari/galvantula/internal/sandbox"
 	"github.com/brokentari/galvantula/internal/workspace"
 	"github.com/brokentari/galvantula/standards"
@@ -42,14 +43,6 @@ type Claude struct {
 	timeout time.Duration // replaces the node time limit in tests
 }
 
-const brief = `Build the program that spec.md describes, in this directory. AGENTS.md, which is part of your instructions, holds the rules for the code and its prose.
-
-- Write the code and its tests. Use only the standard library.
-- Do not change or delete a file that was here when you started: AGENTS.md, CLAUDE.md, spec.md, go.mod and .factory/. The check fails if you do.
-- Before you finish, make all of these pass: gofmt -l . (prints nothing), go vet ./..., go fix -diff ./... (prints nothing), go build ./... and go test ./...
-- Write NOTES.md: in a few lines, what you built and each assumption you made where the spec is unclear.
-- Do not leave build output, such as compiled programs, in the directory.`
-
 var tools = []string{"Read", "Write", "Edit", "Glob", "Grep", "Bash"}
 
 var allow = []string{"Bash(go build *)", "Bash(go test *)", "Bash(go vet *)", "Bash(go fix *)",
@@ -60,13 +53,15 @@ func (c Claude) Run(ctx context.Context, t Task, log func(string)) (Result, erro
 	if err != nil {
 		return Result{}, &InfraError{Err: err}
 	}
-	switch {
-	case t.Node.Kind == graph.Tool && t.Node.ID == "standards":
+	switch role := cmp.Or(t.Node.Role, t.Node.ID); {
+	case t.Node.Kind == graph.Tool && role == "standards":
 		return Result{}, c.writeStandards(repo, log)
+	case t.Node.Kind == graph.Tool && role == "verify":
+		return Result{}, c.verify(ctx, repo, log)
 	case t.Node.Kind == graph.Agent:
 		return c.agent(ctx, repo, t, log)
 	}
-	return Result{}, fmt.Errorf("the claude executor cannot run %s node %q yet", t.Node.Kind, t.Node.ID)
+	return Result{}, fmt.Errorf("the claude executor cannot run %s node %q", t.Node.Kind, t.Node.ID)
 }
 
 // writeStandards puts the rules, the spec and go.mod on main. Every agent
@@ -107,6 +102,16 @@ func (c Claude) writeStandards(repo workspace.Repo, log func(string)) error {
 }
 
 func (c Claude) agent(ctx context.Context, repo workspace.Repo, t Task, log func(string)) (Result, error) {
+	p, ok := plans[cmp.Or(t.Node.Role, "builder")]
+	if !ok {
+		return Result{}, fmt.Errorf("node %q has no role the executor knows", t.Node.ID)
+	}
+	if p.skip != nil {
+		if why := p.skip(repo); why != "" {
+			log("skipped: " + why)
+			return Result{}, nil
+		}
+	}
 	run := filepath.Join(c.Root, t.Run)
 	wt, err := repo.Worktree(t.Node.ID)
 	if err != nil {
@@ -124,7 +129,7 @@ func (c Claude) agent(ctx context.Context, repo workspace.Repo, t Task, log func
 		return Result{}, &InfraError{Err: err}
 	}
 
-	role := c.Rails.Models.Implementer
+	role := p.model(c.Rails.Models)
 	bare := strings.HasPrefix(c.Auth, "ANTHROPIC_API_KEY=")
 	cache, err := c.newCache()
 	if err != nil {
@@ -133,14 +138,28 @@ func (c Claude) agent(ctx context.Context, repo workspace.Repo, t Task, log func
 	defer os.RemoveAll(cache)
 	box := c.box(cache, wt, home, []string{c.Auth, "DISABLE_AUTOUPDATER=1"})
 	box.RO = append(box.RO, bin)
+	system := filepath.Join(wt, "AGENTS.md")
+	if p.readOnly {
+		// A reviewer reads the code and cannot change it.
+		box.RW = slices.DeleteFunc(box.RW, func(d string) bool { return d == wt })
+		box.RO = append(box.RO, wt)
+		text, err := reviewSystem(c.Rails.Go.Version)
+		if err != nil {
+			return Result{}, err
+		}
+		system = filepath.Join(home, "system.md")
+		if err := os.WriteFile(system, []byte(text), 0o644); err != nil {
+			return Result{}, &InfraError{Err: err}
+		}
+	}
 	opts := claude.Options{
 		Dir:          wt,
 		Model:        role.Model,
 		Effort:       role.Effort,
-		SystemFile:   filepath.Join(wt, "AGENTS.md"),
-		Tools:        tools,
-		Allow:        allow,
-		Mode:         "acceptEdits",
+		SystemFile:   system,
+		Tools:        p.tools,
+		Allow:        p.allow,
+		Mode:         p.mode,
 		MaxBudgetUSD: c.Rails.Budget.NodeUSD,
 		Bin:          bin,
 		Bare:         &bare,
@@ -165,7 +184,9 @@ func (c Claude) agent(ctx context.Context, repo workspace.Repo, t Task, log func
 		if err := os.WriteFile(session, []byte(opts.SessionID), 0o644); err != nil {
 			return Result{}, &InfraError{Err: err}
 		}
-		opts.Prompt = brief
+		if opts.Prompt, err = p.brief(repo, t); err != nil {
+			return Result{}, &InfraError{Err: err}
+		}
 		if t.Feedback != "" {
 			opts.Prompt += "\n\nAn earlier attempt failed. The factory reported:\n\n" + t.Feedback
 		}
@@ -194,12 +215,28 @@ func (c Claude) agent(ctx context.Context, repo workspace.Repo, t Task, log func
 		return spent, err
 	}
 
+	if p.readOnly {
+		// The report goes on main, where the fix node reads it.
+		path := filepath.Join(repo.Dir, reviewFile)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			return spent, &InfraError{Err: err}
+		}
+		if err := os.WriteFile(path, []byte(res.Text+"\n"), 0o644); err != nil {
+			return spent, &InfraError{Err: err}
+		}
+		if _, err := repo.CommitAll(repo.Dir, "review"); err != nil {
+			return spent, &InfraError{Err: err}
+		}
+		log("review: " + review.Verdict(res.Text))
+		return spent, nil
+	}
+
 	// Remove build output first, so the check sees what main will get.
 	if err := removeBinaries(repo, wt, log); err != nil {
 		return spent, &InfraError{Err: err}
 	}
 	log("check")
-	if err := c.check(ctx, repo, wt); err != nil {
+	if err := c.check(ctx, repo, wt, p, log); err != nil {
 		return spent, fmt.Errorf("check failed:\n%w", err)
 	}
 	if _, err := repo.CommitAll(wt, fmt.Sprintf("%s: attempt %d", t.Node.ID, t.Attempt)); err != nil {
@@ -209,6 +246,9 @@ func (c Claude) agent(ctx context.Context, repo workspace.Repo, t Task, log func
 		return spent, &InfraError{Err: err}
 	}
 	log("merged into main")
+	if p.after != nil {
+		p.after(repo, log)
+	}
 	return spent, nil
 }
 
@@ -261,14 +301,25 @@ func hasNUL(path string) (bool, error) {
 
 // check runs the factory's checks on a worktree. Build and test run the
 // agent's code, so they run in the sandbox too, without any credential.
-func (c Claude) check(ctx context.Context, repo workspace.Repo, wt string) error {
+func (c Claude) check(ctx context.Context, repo workspace.Repo, wt string, p plan, log func(string)) error {
 	var errs []error
 	changed, err := repo.Changed(wt)
 	if err != nil {
 		return &InfraError{Err: err}
 	}
+	if p.frozen != nil {
+		changed = slices.DeleteFunc(changed, func(f string) bool { return !p.frozen(f) })
+	}
 	if len(changed) > 0 {
 		errs = append(errs, fmt.Errorf("these files must not change: %s", strings.Join(changed, ", ")))
+	}
+	for _, f := range p.needs {
+		if info, err := os.Stat(filepath.Join(wt, f)); err != nil || info.Size() == 0 {
+			errs = append(errs, fmt.Errorf("%s must exist and not be empty", f))
+		}
+	}
+	if err := noSkips(wt); err != nil {
+		errs = append(errs, err)
 	}
 	home, err := os.MkdirTemp("", "check-home")
 	if err != nil {
@@ -286,20 +337,93 @@ func (c Claude) check(ctx context.Context, repo workspace.Repo, wt string) error
 	// The checks run the agent's code. It must not change what the runtime commits.
 	box.RW = slices.DeleteFunc(box.RW, func(p string) bool { return p == wt })
 	box.RO = append(box.RO, wt)
-	for _, step := range [][]string{
+	steps := [][]string{
 		{"gofmt", "-l", "."},
 		{"go", "vet", "./..."},
-		{"go", "fix", "-diff", "./..."},                    // exits non-zero when it has a change to suggest
-		{"go", "build", "-o", os.DevNull, "./..."},         // a single main package would otherwise leave its binary here
-		{"go", "test", "-count=1", "-timeout=2m", "./..."}, // a hung test fails the check, not the worker
-	} {
+		{"go", "fix", "-diff", "./..."},            // exits non-zero when it has a change to suggest
+		{"go", "build", "-o", os.DevNull, "./..."}, // a single main package would otherwise leave its binary here
+	}
+	if !p.red {
+		steps = append(steps, []string{"go", "test", "-count=1", "-timeout=2m", "./..."}) // a hung test fails the check, not the worker
+	}
+	errs = append(errs, runSteps(ctx, box, steps)...)
+	if p.red {
+		if err := c.red(ctx, box, log); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// runSteps runs each command in the sandbox and returns one error for each that fails.
+func runSteps(ctx context.Context, box sandbox.Spec, steps [][]string) []error {
+	var errs []error
+	for _, step := range steps {
 		out, err := sandbox.Command(ctx, box, step[0], step[1:]...).CombinedOutput()
 		quiet := step[0] == "gofmt" // gofmt lists files to fix and still exits 0
 		if err != nil || (quiet && len(out) > 0) {
 			errs = append(errs, fmt.Errorf("%s:\n%s", strings.Join(step, " "), gotest.Tail(string(out), 40)))
 		}
 	}
-	return errors.Join(errs...)
+	return errs
+}
+
+// red is the architect's red-before-green check. The tests run on the stubs,
+// and at least minRed of them must fail: a test that passes on a stub tests
+// nothing, and a panic in a stub would hide the tests after it.
+func (c Claude) red(ctx context.Context, box sandbox.Spec, log func(string)) error {
+	out, _ := sandbox.Command(ctx, box, "go", "test", "-count=1", "-timeout=2m", "-json", "./...").CombinedOutput()
+	passed, failed, text := gotest.Count(string(out))
+	total := passed + failed
+	log(fmt.Sprintf("red before green: %d of %d tests fail on the stubs", failed, total))
+	switch {
+	case total < minTests:
+		return fmt.Errorf("the tests ran %d tests on your stubs; at least %d must run. They may not compile, or a stub may panic, which stops the run:\n%s", total, minTests, gotest.Tail(text, 30))
+	case float64(failed) < minRed*float64(total):
+		return fmt.Errorf("only %d of %d tests fail on your stubs; at least %.0f%% must. A test that passes on a stub tests nothing, unless doing nothing is correct", failed, total, minRed*100)
+	}
+	return nil
+}
+
+// verify is the last step: the whole suite with the race detector, on what
+// is on main, and a check that go.mod still names no module.
+func (c Claude) verify(ctx context.Context, repo workspace.Repo, log func(string)) error {
+	home, err := os.MkdirTemp("", "verify-home")
+	if err != nil {
+		return &InfraError{Err: err}
+	}
+	defer os.RemoveAll(home)
+	cache, err := c.newCache()
+	if err != nil {
+		return &InfraError{Err: err}
+	}
+	defer os.RemoveAll(cache)
+	box := c.box(cache, repo.Dir, home, nil)
+	box.RW = slices.DeleteFunc(box.RW, func(p string) bool { return p == repo.Dir })
+	box.RO = append(box.RO, repo.Dir)
+
+	var errs []error
+	mod, err := os.ReadFile(filepath.Join(repo.Dir, "go.mod"))
+	switch {
+	case err != nil:
+		errs = append(errs, err)
+	case strings.Contains(string(mod), "require"):
+		errs = append(errs, errors.New("go.mod names a module; products use only the standard library"))
+	case !strings.Contains(string(mod), "go "+c.Rails.Go.Version+"\n"):
+		errs = append(errs, fmt.Errorf("go.mod must say go %s", c.Rails.Go.Version))
+	}
+	errs = append(errs, runSteps(ctx, box, [][]string{
+		{"gofmt", "-l", "."},
+		{"go", "vet", "./..."},
+		{"go", "fix", "-diff", "./..."},
+		{"go", "build", "-o", os.DevNull, "./..."},
+		{"go", "test", "-race", "-count=1", "-timeout=5m", "./..."},
+	})...)
+	if err := errors.Join(errs...); err != nil {
+		return fmt.Errorf("verify failed:\n%w", err)
+	}
+	log("verify passed: the suite passes with -race")
+	return nil
 }
 
 // box is the sandbox for one worktree, with the Go settings the factory needs.

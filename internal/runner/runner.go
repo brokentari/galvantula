@@ -115,6 +115,8 @@ type Run struct {
 	FakeScript string
 	Spec       string
 	Rails      guardrails.Guardrails
+	// AutoApprove approves every gate without a human. Eval runs use it.
+	AutoApprove bool
 }
 
 // Start records a new run and starts driving it.
@@ -142,7 +144,7 @@ func (r *Runner) Start(run Run) (string, error) {
 		return invalid(fmt.Errorf("unknown executor %q", run.Executor))
 	}
 	id := "r-" + strings.ToLower(rand.Text()[:10])
-	data := event.RunCreatedData{Graph: run.Graph, Executor: run.Executor, FakeScript: run.FakeScript, Spec: run.Spec, Guardrails: run.Rails, Commit: r.Commit}
+	data := event.RunCreatedData{Graph: run.Graph, Executor: run.Executor, FakeScript: run.FakeScript, Spec: run.Spec, Guardrails: run.Rails, Commit: r.Commit, AutoApprove: run.AutoApprove}
 	if _, err := r.store.Append(event.New(id, event.RunCreated, "", 0, data)); err != nil {
 		return "", err
 	}
@@ -248,12 +250,20 @@ func (r *Runner) drive(id string, a *active) error {
 	running := 0
 	for st.Status == event.RunRunning {
 		stop := stopReason(st)
+		decided := false // a gate was decided here, so more nodes may be ready
 		if stop == "" {
 			for _, n := range ready(st) {
 				switch n.Kind {
 				case graph.Gate:
 					if err := emit(event.New(id, event.GateWaiting, n.ID, 0, nil)); err != nil {
 						return err
+					}
+					if st.AutoApprove {
+						d := event.GateDecidedData{Approved: true, Notes: "approved by the runtime: this run has no human"}
+						if err := emit(event.New(id, event.GateDecided, n.ID, 0, d)); err != nil {
+							return err
+						}
+						decided = true
 					}
 					continue
 				case graph.Slot:
@@ -302,6 +312,9 @@ func (r *Runner) drive(id string, a *active) error {
 			}
 		}
 
+		if decided {
+			continue
+		}
 		if running == 0 {
 			if status, reason, done := finished(st, stop); done {
 				return emit(event.New(id, event.RunFinished, "", 0,
@@ -360,6 +373,7 @@ func (r *Runner) fail(st *event.State, emit func(event.Event) error, n graph.Nod
 	} else {
 		d.WillRetry = ns.TaskFailures+1 <= n.Retries
 	}
+	d.Abandoned = !d.WillRetry && n.Advisory
 	return emit(event.New(st.Run, event.NodeFailed, n.ID, attempt, d))
 }
 

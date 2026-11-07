@@ -21,6 +21,7 @@ import (
 
 	"github.com/brokentari/galvantula/internal/claude"
 	"github.com/brokentari/galvantula/internal/guardrails"
+	"github.com/brokentari/galvantula/internal/review"
 	"github.com/brokentari/galvantula/standards"
 )
 
@@ -55,14 +56,14 @@ func run() int {
 		log.Print("usage: phasereview -phase name [-base ref]")
 		return 2
 	}
-	if err := review(*phase, *base, *rails); err != nil {
+	if err := runReview(*phase, *base, *rails); err != nil {
 		log.Print(err)
 		return 1
 	}
 	return 0
 }
 
-func review(phase, base, rails string) error {
+func runReview(phase, base, rails string) error {
 	g, err := guardrails.Load(rails)
 	if err != nil {
 		return err
@@ -127,7 +128,7 @@ func review(phase, base, rails string) error {
 	if err := os.WriteFile(out, []byte(report), 0o644); err != nil {
 		return err
 	}
-	v := verdict(res.Text)
+	v := review.Verdict(res.Text)
 	log.Printf("wrote %s ($%.2f): verdict: %s", out, res.CostUSD, v)
 	if v != "Ship." {
 		return errors.New("the verdict is not Ship")
@@ -139,22 +140,6 @@ func review(phase, base, rails string) error {
 // review leaves out.
 func uncommitted() (string, error) {
 	return git("status", "--porcelain", "--", ".", ":(exclude)docs/reviews")
-}
-
-// verdict returns the text after the report's last "Verdict:" line. A
-// report with no findings ends with "Looks good. Ship." instead, as
-// ponytail-review asks.
-func verdict(report string) string {
-	v := "no verdict line"
-	for line := range strings.Lines(report) {
-		line = strings.Trim(strings.TrimSpace(line), "*")
-		if rest, ok := strings.CutPrefix(line, "Verdict:"); ok {
-			v = strings.Trim(strings.TrimSpace(rest), "*")
-		} else if line == "Looks good. Ship." {
-			v = "Ship."
-		}
-	}
-	return strings.TrimSpace(v)
 }
 
 // describeChange returns the commit messages, the changed files and, if it

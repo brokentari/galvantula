@@ -117,3 +117,23 @@ nodes:
 		})
 	}
 }
+
+func TestRolesAndAdvisory(t *testing.T) {
+	tests := []struct {
+		name, yaml, want string
+	}{
+		{"agent role on a tool", "name: g\nnodes:\n  - {id: a, kind: tool, role: architect}", `role "architect" is not valid for a tool node`},
+		{"unknown role", "name: g\nnodes:\n  - {id: a, kind: agent, role: boss}", `role "boss" is not valid`},
+		{"advisory tool", "name: g\nnodes:\n  - {id: a, kind: tool, advisory: true}", "only agent nodes may be advisory"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := Parse([]byte(tt.yaml)); err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("got %v, want an error with %q", err, tt.want)
+			}
+		})
+	}
+	if _, err := Parse([]byte("name: g\nnodes:\n  - {id: a, kind: agent, role: reviewer, advisory: true}\n  - {id: b, kind: tool, role: verify, deps: [a]}")); err != nil {
+		t.Fatal(err)
+	}
+}

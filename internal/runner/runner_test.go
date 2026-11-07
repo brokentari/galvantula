@@ -487,3 +487,56 @@ func TestUsageLimitStopsWithoutRetry(t *testing.T) {
 		t.Errorf("run %s, node attempts %d, class %q; want failed after 1 attempt with class limit", st.Status, a.Attempt, a.LastClass)
 	}
 }
+
+// An advisory node that fails for good does not fail the run. The tests,
+// not the review, decide the outcome.
+func TestAdvisoryNodeCannotFailTheRun(t *testing.T) {
+	store := openStore(t)
+	r := New(t.Context(), store, 1)
+	r.Executor = fast
+	run, err := r.Start(Run{
+		Graph:      mustParse(t, "name: g\nnodes:\n  - {id: review, kind: agent, advisory: true, retries: 1}\n  - {id: verify, kind: tool, deps: [review]}"),
+		Executor:   "fake",
+		FakeScript: "nodes:\n  review: {fail_attempts: 9, error: the review crashed}",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, evs := waitUntil(t, store, run, "the run finishes", runDone)
+	if st.Status != event.RunSucceeded {
+		t.Fatalf("run %s: %s; an advisory failure must not fail it", st.Status, st.Reason)
+	}
+	if n := st.Nodes["review"]; n.TaskFailures != 2 || n.LastError != "the review crashed" {
+		t.Errorf("review: %d task failures, error %q; want 2 and the crash recorded", n.TaskFailures, n.LastError)
+	}
+	if index(evs, event.NodeStarted, "verify") < 0 {
+		t.Error("verify never started")
+	}
+}
+
+// A run with AutoApprove gets through its gates with no human, and the log
+// says that the runtime decided.
+func TestAutoApproveGates(t *testing.T) {
+	store := openStore(t)
+	r := New(t.Context(), store, 1)
+	r.Executor = fast
+	run, err := r.Start(Run{
+		Graph:       mustParse(t, "name: g\nnodes:\n  - {id: a, kind: tool}\n  - {id: ok, kind: gate, deps: [a]}\n  - {id: b, kind: tool, deps: [ok]}"),
+		Executor:    "fake",
+		AutoApprove: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, evs := waitUntil(t, store, run, "the run finishes", runDone)
+	if st.Status != event.RunSucceeded {
+		t.Fatalf("run %s: %s", st.Status, st.Reason)
+	}
+	i := index(evs, event.GateDecided, "ok")
+	if i < 0 {
+		t.Fatal("the gate was never decided")
+	}
+	if d, _ := evs[i].Decode[event.GateDecidedData](); !d.Approved || !strings.Contains(d.Notes, "runtime") {
+		t.Errorf("decision %+v, want an approval that names the runtime", d)
+	}
+}
