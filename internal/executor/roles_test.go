@@ -100,7 +100,7 @@ func TestArchitectMergesAContractThatFailsOnItsStubs(t *testing.T) {
 	if res.CostUSD != 0.25 {
 		t.Errorf("cost %v, want 0.25", res.CostUSD)
 	}
-	for _, want := range []string{"red before green: 6 of 6 tests fail on the stubs", "# Contract", "merged into main"} {
+	for _, want := range []string{"6 of 6 tests fail on the stubs", "# Contract", "merged into main"} {
 		if !strings.Contains(log, want) {
 			t.Errorf("log lacks %q:\n%s", want, log)
 		}
@@ -180,6 +180,8 @@ func TestImplementerCannotChangeTheContract(t *testing.T) {
 		{"edits a test", writeFile("main.go", doneMain) + "echo '// edited' >> main_test.go\n", "must not change: main_test.go"},
 		{"edits the contract", writeFile("main.go", doneMain) + "echo more >> CONTRACT.md\n", "must not change: CONTRACT.md"},
 		{"deletes a test", writeFile("main.go", doneMain) + "rm main_test.go\n", "must not change: main_test.go"},
+		// A TestMain that exits with 1 after the tests pass fails no test.
+		{"TestMain exits with 1", writeFile("main.go", doneMain) + writeFile("main_exit_test.go", "package main\n\nimport (\n\t\"os\"\n\t\"testing\"\n)\n\nfunc TestMain(m *testing.M) {\n\tm.Run()\n\tos.Exit(1)\n}\n"), "exited with an error"},
 		// An init that exits makes go test print ok with no test run.
 		{"exits before the tests run", writeFile("main.go", doneMain+"\nfunc init() { os.Exit(0) }\n") + "sed -i 's/^package main$/package main\\n\\nimport \"os\"/' main.go\n", "0 tests ran"},
 		{"skips in a new test", writeFile("main.go", doneMain) + writeFile("extra_test.go", skipping), "must not skip tests: extra_test.go"},

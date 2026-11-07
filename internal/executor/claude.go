@@ -340,13 +340,7 @@ func (c Claude) check(ctx context.Context, repo workspace.Repo, wt string, p pla
 	// The checks run the agent's code. It must not change what the runtime commits.
 	box.RW = slices.DeleteFunc(box.RW, func(p string) bool { return p == wt })
 	box.RO = append(box.RO, wt)
-	steps := [][]string{
-		{"gofmt", "-l", "."},
-		{"go", "vet", "./..."},
-		{"go", "fix", "-diff", "./..."},            // exits non-zero when it has a change to suggest
-		{"go", "build", "-o", os.DevNull, "./..."}, // a single main package would otherwise leave its binary here
-	}
-	errs = append(errs, runSteps(ctx, box, steps)...)
+	errs = append(errs, runSteps(ctx, box, baseSteps)...)
 	if p.red {
 		if err := c.red(ctx, box, log); err != nil {
 			errs = append(errs, err)
@@ -363,15 +357,26 @@ func (c Claude) check(ctx context.Context, repo workspace.Repo, wt string, p pla
 // otherwise pass with no test run.
 func testsPass(ctx context.Context, box sandbox.Spec, min int, flags ...string) error {
 	args := append([]string{"test", "-count=1", "-json"}, flags...)
-	out, _ := sandbox.Command(ctx, box, "go", append(args, "./...")...).CombinedOutput()
+	out, err := sandbox.Command(ctx, box, "go", append(args, "./...")...).CombinedOutput()
 	passed, failed, text := gotest.Count(string(out))
 	switch {
 	case failed > 0:
 		return fmt.Errorf("go test %s: %d of %d tests failed or skipped:\n%s", strings.Join(flags, " "), failed, passed+failed, gotest.Tail(text, 40))
+	case err != nil:
+		// A package can fail with no test failing: a TestMain that returns 1, or a panic in init.
+		return fmt.Errorf("go test %s exited with an error:\n%s", strings.Join(flags, " "), gotest.Tail(text, 40))
 	case passed < min:
 		return fmt.Errorf("go test %s: %d tests ran; at least %d must. A test binary that exits early runs none:\n%s", strings.Join(flags, " "), passed, min, gotest.Tail(text, 20))
 	}
 	return nil
+}
+
+// baseSteps are the checks that the check and verify share, before the tests.
+var baseSteps = [][]string{
+	{"gofmt", "-l", "."},
+	{"go", "vet", "./..."},
+	{"go", "fix", "-diff", "./..."},            // exits non-zero when it has a change to suggest
+	{"go", "build", "-o", os.DevNull, "./..."}, // a single main package would otherwise leave its binary here
 }
 
 // runSteps runs each command in the sandbox and returns one error for each that fails.
@@ -387,14 +392,14 @@ func runSteps(ctx context.Context, box sandbox.Spec, steps [][]string) []error {
 	return errs
 }
 
-// red is the architect's red-before-green check. The tests run on the stubs,
-// and at least minRed of them must fail: a test that passes on a stub tests
+// red checks that the architect's tests fail on its stubs. At least minRed
+// of them must fail: a test that passes on a stub tests
 // nothing, and a panic in a stub would hide the tests after it.
 func (c Claude) red(ctx context.Context, box sandbox.Spec, log func(string)) error {
 	out, _ := sandbox.Command(ctx, box, "go", "test", "-count=1", "-timeout=2m", "-json", "./...").CombinedOutput()
 	passed, failed, text := gotest.Count(string(out))
 	total := passed + failed
-	log(fmt.Sprintf("red before green: %d of %d tests fail on the stubs", failed, total))
+	log(fmt.Sprintf("%d of %d tests fail on the stubs", failed, total))
 	switch {
 	case total < minTests:
 		return fmt.Errorf("the tests ran %d tests on your stubs; at least %d must run. They may not compile, or a stub may panic, which stops the run:\n%s", total, minTests, gotest.Tail(text, 30))
@@ -431,12 +436,7 @@ func (c Claude) verify(ctx context.Context, repo workspace.Repo, log func(string
 	case !strings.Contains(string(mod), "go "+c.Rails.Go.Version+"\n"):
 		errs = append(errs, fmt.Errorf("go.mod must say go %s", c.Rails.Go.Version))
 	}
-	errs = append(errs, runSteps(ctx, box, [][]string{
-		{"gofmt", "-l", "."},
-		{"go", "vet", "./..."},
-		{"go", "fix", "-diff", "./..."},
-		{"go", "build", "-o", os.DevNull, "./..."},
-	})...)
+	errs = append(errs, runSteps(ctx, box, baseSteps)...)
 	if err := testsPass(ctx, box, minTests, "-race", "-timeout=5m"); err != nil {
 		errs = append(errs, err)
 	}
