@@ -276,3 +276,48 @@ func TestReviewerWithoutAReportFails(t *testing.T) {
 		t.Error("an empty report was saved")
 	}
 }
+
+// passingTests returns n tests that pass on the stubs.
+func passingTests(n int) string {
+	var b strings.Builder
+	for i := range n {
+		fmt.Fprintf(&b, "\nfunc TestPassesOnStubs%d(t *testing.T) {}\n", i)
+	}
+	return b.String()
+}
+
+// The architect's rule is at least 80% of the tests failing: 4 of 5 passes
+// the check, and 3 of 5 does not.
+func TestArchitectRedThreshold(t *testing.T) {
+	tests := []struct {
+		name  string
+		fails int
+		want  string // empty: the contract is accepted
+	}{
+		{"4 of 5 fail", 4, ""},
+		{"3 of 5 fail", 3, "only 3 of 5 tests fail"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c, _ := setUpRun(t)
+			work := writeFile("main.go", stubMain) + writeFile("main_test.go", testsOn(tt.fails)+passingTests(5-tt.fails)) + writeFile("CONTRACT.md", contract)
+			fakeAgents(t, map[string]string{"architect": work})
+			_, _, err := runNode(t, c, "architect", "architect")
+			switch {
+			case tt.want == "" && err != nil:
+				t.Fatalf("got %v, want the contract accepted", err)
+			case tt.want != "" && (err == nil || !strings.Contains(err.Error(), tt.want)):
+				t.Fatalf("got %v, want a failure with %q", err, tt.want)
+			}
+		})
+	}
+}
+
+// The brief tells the architect the rule that the check enforces.
+func TestArchitectBriefStatesTheRule(t *testing.T) {
+	for _, want := range []string{"at least 5 tests", "at least 80% failing"} {
+		if !strings.Contains(architectBrief, want) {
+			t.Errorf("the architect brief lacks %q", want)
+		}
+	}
+}

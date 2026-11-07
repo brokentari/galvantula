@@ -56,7 +56,10 @@ const builderBrief = `Build the program that spec.md describes, in this director
 - Write NOTES.md: in a few lines, what you built and each assumption you made where the spec is unclear.
 ` + rules
 
-const architectBrief = `Design the program that spec.md describes, in this directory. Do not implement it. AGENTS.md, which is part of your instructions, holds the rules for the code and its prose.
+// architectBrief is built from minTests and minRed, so it always states the rule the check enforces.
+var architectBrief = fmt.Sprintf(architectTemplate, minTests, int(minRed*100))
+
+const architectTemplate = `Design the program that spec.md describes, in this directory. Do not implement it. AGENTS.md, which is part of your instructions, holds the rules for the code and its prose.
 
 Write these files:
 - The packages, types and function signatures of the program. Each function body is a stub that compiles and returns zero values or an error such as errors.New("not implemented"). A stub must never panic: a panic stops the test run, so the other tests cannot run.
@@ -65,7 +68,7 @@ Write these files:
 
 Rules for the tests:
 - A builder will implement the stubs, and may not change your tests. Test what the spec says, and nothing it leaves open.
-- Every test must fail on the stubs, except a test of a case where doing nothing is correct. The check runs the tests on your stubs and requires at least 5 tests, with at least 80% failing.
+- Every test must fail on the stubs, except a test of a case where doing nothing is correct. The check runs the tests on your stubs and requires at least %d tests, with at least %d%% failing.
 - Do not change or delete a file that was here when you started: AGENTS.md, CLAUDE.md, spec.md, go.mod and .factory/.
 ` + rules
 

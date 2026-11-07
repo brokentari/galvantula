@@ -127,7 +127,7 @@ export function describe(e: FactoryEvent): string {
     case "node_succeeded":
       return `${e.node} succeeded`;
     case "node_failed":
-      return `${e.node} failed (${failureKind(e.data.class)}${e.data.will_retry ? ", will retry" : ""}): ${e.data.error}`;
+      return `${e.node} failed (${failureKind(e.data.class)}${e.data.will_retry ? ", will retry" : e.data.abandoned ? ", the run goes on" : ""}): ${e.data.error}`;
     case "gate_waiting":
       return `${e.node} waits for you`;
     case "gate_decided":

@@ -140,16 +140,8 @@ func (c Claude) agent(ctx context.Context, repo workspace.Repo, t Task, log func
 	box.RO = append(box.RO, bin)
 	system := filepath.Join(wt, "AGENTS.md")
 	if p.readOnly {
-		// A reviewer reads the code and cannot change it.
-		box.RW = slices.DeleteFunc(box.RW, func(d string) bool { return d == wt })
-		box.RO = append(box.RO, wt)
-		text, err := reviewSystem(c.Rails.Go.Version)
-		if err != nil {
+		if system, err = c.readOnlyAgent(&box, wt, home); err != nil {
 			return Result{}, err
-		}
-		system = filepath.Join(home, "system.md")
-		if err := os.WriteFile(system, []byte(text), 0o644); err != nil {
-			return Result{}, &InfraError{Err: err}
 		}
 	}
 	opts := claude.Options{
@@ -216,19 +208,8 @@ func (c Claude) agent(ctx context.Context, repo workspace.Repo, t Task, log func
 	}
 
 	if p.readOnly {
-		if strings.TrimSpace(res.Text) == "" {
-			return spent, errors.New("the reviewer ended without a report")
-		}
-		// The report goes on main, where the fix node reads it.
-		path := filepath.Join(repo.Dir, reviewFile)
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			return spent, &InfraError{Err: err}
-		}
-		if err := os.WriteFile(path, []byte(res.Text+"\n"), 0o644); err != nil {
-			return spent, &InfraError{Err: err}
-		}
-		if _, err := repo.CommitAll(repo.Dir, "review"); err != nil {
-			return spent, &InfraError{Err: err}
+		if err := saveReview(repo, res.Text); err != nil {
+			return spent, err
 		}
 		log("review: " + review.Verdict(res.Text))
 		return spent, nil
@@ -253,6 +234,41 @@ func (c Claude) agent(ctx context.Context, repo workspace.Repo, t Task, log func
 		p.after(repo, log)
 	}
 	return spent, nil
+}
+
+// readOnlyAgent makes the worktree read-only in the box, so that a reviewer
+// cannot change the code, and writes the reviewer's instructions. It returns
+// the path of that file.
+func (c Claude) readOnlyAgent(box *sandbox.Spec, wt, home string) (string, error) {
+	box.RW = slices.DeleteFunc(box.RW, func(d string) bool { return d == wt })
+	box.RO = append(box.RO, wt)
+	text, err := reviewSystem(c.Rails.Go.Version)
+	if err != nil {
+		return "", err
+	}
+	system := filepath.Join(home, "system.md")
+	if err := os.WriteFile(system, []byte(text), 0o644); err != nil {
+		return "", &InfraError{Err: err}
+	}
+	return system, nil
+}
+
+// saveReview puts the reviewer's report on main, where the fix node reads it.
+func saveReview(repo workspace.Repo, text string) error {
+	if strings.TrimSpace(text) == "" {
+		return errors.New("the reviewer ended without a report")
+	}
+	path := filepath.Join(repo.Dir, reviewFile)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return &InfraError{Err: err}
+	}
+	if err := os.WriteFile(path, []byte(text+"\n"), 0o644); err != nil {
+		return &InfraError{Err: err}
+	}
+	if _, err := repo.CommitAll(repo.Dir, "review"); err != nil {
+		return &InfraError{Err: err}
+	}
+	return nil
 }
 
 // removeBinaries deletes new executable files that hold a NUL byte, such as a
@@ -393,7 +409,7 @@ func (c Claude) red(ctx context.Context, box sandbox.Spec, log func(string)) err
 	log(fmt.Sprintf("%d of %d tests fail on the stubs", failed, total))
 	switch {
 	case total < minTests:
-		return fmt.Errorf("the tests ran %d tests on your stubs; at least %d must run. They may not compile, or a stub may panic, which stops the run:\n%s", total, minTests, gotest.Tail(text, 30))
+		return fmt.Errorf("only %d tests ran on your stubs; at least %d must run. They may not compile, or a stub may panic, which stops the run:\n%s", total, minTests, gotest.Tail(text, 30))
 	case float64(failed) < minRed*float64(total):
 		return fmt.Errorf("only %d of %d tests fail on your stubs; at least %.0f%% must. A test that passes on a stub tests nothing, unless doing nothing is correct", failed, total, minRed*100)
 	}
