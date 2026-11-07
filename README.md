@@ -5,17 +5,17 @@ comes out. A Go runtime owns a graph of work. Claude Code runs each agent
 node. A React UI shows each run live. The full plan is in
 [Software Factory Plan.html](Software%20Factory%20Plan.html).
 
-**Status: phase 2 (the pipeline) is built.** On commit 83d02fb, with the
-full pipeline and no human at the gate, the hidden tests passed in 4 of 5
-evals: `wordfreq`, `todo`, `csvq` and `dedupe`
-(`evals/results/2026-11-07-83d02fb.jsonl`). `calc` failed because the
-architect wrote a wrong test, which no later node may change; the contract
-gate is meant to catch that, and an eval has no human to do it. Each run
-cost $0.32 to $0.84 by Claude Code's estimate at API prices, not a charge on
-a plan. Phase 1 (one sandboxed agent) passed its standards review and its
-final batch (`docs/reviews/phase-1.md`,
-`evals/results/2026-11-06-ed690be.jsonl`). Phase 0 passed its review too
-(`docs/reviews/phase-0.md`).
+**Status: phase 2 (the pipeline) is done.** It passed its standards review
+(`docs/reviews/phase-2.md`, verdict "Ship." after 7 rounds). On the final code
+(commit 073ce17), with no human at the gate, the hidden tests passed in all 5
+evals: `wordfreq`, `todo`, `csvq`, `dedupe` and `calc`, one run each
+(`evals/results/2026-11-07-073ce17.jsonl`). Each run cost $0.35 to $0.80 by
+Claude Code's estimate at API prices, not a charge on a plan, and took 2.7 to
+5.3 minutes. An earlier batch on commit 83d02fb passed 4 of 5: `calc` failed
+when the architect wrote a wrong test, which no later node may change. The
+contract gate is meant to catch that, and an eval has no human to do it.
+Phase 1 (one sandboxed agent) and phase 0 passed their reviews too
+(`docs/reviews/`).
 
 ## Run the demo
 
