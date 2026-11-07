@@ -235,6 +235,18 @@ func (r *Runner) drive(id string, a *active) error {
 			event.RunFinishedData{Status: event.RunFailed, Reason: err.Error()}))
 	}
 
+	// A gate still waiting in an auto-approved run lost its decision to a crash.
+	if st.AutoApprove {
+		for _, n := range st.Graph.Nodes {
+			if st.Nodes[n.ID].Status == event.Waiting {
+				d := event.GateDecidedData{Approved: true, Notes: "approved by the runtime: this run has no human"}
+				if err := emit(event.New(id, event.GateDecided, n.ID, 0, d)); err != nil {
+					return err
+				}
+			}
+		}
+	}
+
 	// A node still marked running was cut off by a crash or a shutdown.
 	for _, n := range st.Graph.Nodes {
 		if ns := st.Nodes[n.ID]; ns.Status == event.Running {

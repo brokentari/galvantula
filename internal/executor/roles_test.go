@@ -250,3 +250,25 @@ func TestVerifyFailures(t *testing.T) {
 		})
 	}
 }
+
+// Every role that the graph accepts must be one that the executor runs.
+func TestEveryAgentRoleHasAPlan(t *testing.T) {
+	for _, role := range graph.Roles[graph.Agent] {
+		if _, ok := plans[role]; !ok {
+			t.Errorf("graph.Roles accepts %q, but plans has no plan for it", role)
+		}
+	}
+}
+
+// A reviewer that ends without a report fails; as an advisory node it is
+// abandoned, and the fix node then has no report and skips itself.
+func TestReviewerWithoutAReportFails(t *testing.T) {
+	c, _ := setUpRun(t)
+	fakeAgents(t, map[string]string{"review": "RESULT=''"})
+	if _, _, err := runNode(t, c, "review", "reviewer"); err == nil || !strings.Contains(err.Error(), "without a report") {
+		t.Fatalf("got %v, want an error about the missing report", err)
+	}
+	if _, err := os.Stat(filepath.Join(c.Root, "r", "repo", ".factory", "review.md")); err == nil {
+		t.Error("an empty report was saved")
+	}
+}

@@ -55,3 +55,18 @@ func must(t *testing.T, err error) {
 		t.Fatal(err)
 	}
 }
+
+// Git quotes non-ASCII names unless it is told to use NUL separators.
+func TestTrackedKeepsNonASCIINames(t *testing.T) {
+	r, err := Open(filepath.Join(t.TempDir(), "repo"))
+	must(t, err)
+	must(t, os.WriteFile(filepath.Join(r.Dir, "café.go"), []byte("package x"), 0o644))
+	if _, err := r.CommitAll(r.Dir, "x"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := r.Tracked(r.Dir)
+	must(t, err)
+	if !slices.Equal(got, []string{"café.go"}) {
+		t.Errorf("Tracked = %q, want [café.go]", got)
+	}
+}

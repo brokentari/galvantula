@@ -540,3 +540,28 @@ func TestAutoApproveGates(t *testing.T) {
 		t.Errorf("decision %+v, want an approval that names the runtime", d)
 	}
 }
+
+// A crash between GateWaiting and the runtime's own GateDecided must not leave
+// an auto-approved run waiting for a human who is not there.
+func TestAutoApprovedGateResumesAfterCrash(t *testing.T) {
+	store := openStore(t)
+	g := mustParse(t, "name: g\nnodes:\n  - {id: a, kind: tool}\n  - {id: ok, kind: gate, deps: [a]}\n  - {id: b, kind: tool, deps: [ok]}")
+	for _, e := range []event.Event{
+		event.New("r", event.RunCreated, "", 0, event.RunCreatedData{Graph: g, Executor: "fake", AutoApprove: true}),
+		event.New("r", event.NodeStarted, "a", 1, nil),
+		event.New("r", event.NodeSucceeded, "a", 1, nil),
+		event.New("r", event.GateWaiting, "ok", 0, nil),
+	} {
+		if _, err := store.Append(e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r := New(t.Context(), store, 1)
+	r.Executor = fast
+	if err := r.ResumeAll(); err != nil {
+		t.Fatal(err)
+	}
+	if st, _ := waitUntil(t, store, "r", "the resumed run finishes", runDone); st.Status != event.RunSucceeded {
+		t.Fatalf("run %s: %s", st.Status, st.Reason)
+	}
+}

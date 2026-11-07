@@ -216,6 +216,9 @@ func (c Claude) agent(ctx context.Context, repo workspace.Repo, t Task, log func
 	}
 
 	if p.readOnly {
+		if strings.TrimSpace(res.Text) == "" {
+			return spent, errors.New("the reviewer ended without a report")
+		}
 		// The report goes on main, where the fix node reads it.
 		path := filepath.Join(repo.Dir, reviewFile)
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {

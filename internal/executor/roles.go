@@ -86,7 +86,7 @@ The review report:
 
 `
 
-const reviewerBrief = `Review the program in this directory. spec.md says what it must do. CONTRACT.md and the _test.go files are the contract the builder had to meet. NOTES.md holds the builder's assumptions. Read the code and the prose that the builder wrote: every file except the standards files (AGENTS.md, CLAUDE.md, .factory/), spec.md, CONTRACT.md and the tests. Read the tests only to check the code against them.
+const reviewerBrief = `Review the program in this directory. spec.md says what it must do. CONTRACT.md and the _test.go files are the contract the builder had to meet. NOTES.md holds the builder's assumptions. Read the code and the prose that the builder wrote: every file in the list below. Read the tests only to check the code against them.
 
 Give the full report as your final answer.
 
@@ -103,8 +103,8 @@ You can read files but not run commands. Your report is advisory: tests, not you
 
 `
 
-// standardsFile reports whether a path is one of the files that the
-// standards node wrote, or the spec, or the contract's notes.
+// standardsFile reports whether a path is a file the standards node wrote,
+// spec.md, go.mod or CONTRACT.md.
 func standardsFile(path string) bool {
 	switch path {
 	case "AGENTS.md", "CLAUDE.md", "spec.md", "go.mod", "CONTRACT.md":
@@ -212,6 +212,10 @@ func logContract(repo workspace.Repo, log func(string)) {
 	}
 }
 
+// skipCall matches any receiver, so it also matches a method named Skip and a
+// comment. shortcut: that can fail a test that does not skip, and the
+// implementer cannot edit it; the architect can rename the method. A narrower
+// match would let a contract skip its tests through another receiver name.
 var skipCall = regexp.MustCompile(`\.Skip(f|Now)?\(`)
 
 // noSkips fails if a test file in dir calls t.Skip: a skipped test does not
