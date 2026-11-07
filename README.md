@@ -5,15 +5,17 @@ comes out. A Go runtime owns a graph of work. Claude Code runs each agent
 node. A React UI shows each run live. The full plan is in
 [Software Factory Plan.html](Software%20Factory%20Plan.html).
 
-**Status: phase 1 (one sandboxed agent) is built.** The first eval batch
-passed the hidden tests in all 31 runs: one trial run of wordfreq on commit
-0163ff3, then 10 runs of each eval on commit 5253e7d
-(`evals/results/2026-11-06-5253e7d.jsonl`). Those lines are older than the
-`commit` field, so they do not record it; new lines do. The median cost was
-$0.10 to $0.17 per run, under the phase's limit of $0.50. The batch ran before
-the fixes from the phase-1 review, so it must run again on the final code
-before phase 1 is done. Phase 0 passed its
-standards review (`docs/reviews/phase-0.md`).
+**Status: phase 1 (one sandboxed agent) is done.** It passed its standards
+review (`docs/reviews/phase-1.md`, verdict "Ship." after 24 rounds). On the
+final code (commit ed690be) the hidden tests passed in 10 of 10 `wordfreq`
+runs, 10 of 10 `todo` runs and 9 of 10 `csvq` runs, at a median cost of
+$0.10, $0.12 and $0.22 per run, under the limit of $0.50
+(`evals/results/2026-11-06-ed690be.jsonl`). One more `csvq` run stopped at the
+account's usage limit; the file records it with `limited: true`, and it is not
+counted. The costs are Claude Code's estimates at API prices, not charges on
+a plan. An earlier batch on commit 5253e7d is in
+`evals/results/2026-11-06-5253e7d.jsonl`. Phase 0 passed its standards review
+(`docs/reviews/phase-0.md`).
 
 ## Run the demo
 
