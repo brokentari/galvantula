@@ -13,6 +13,15 @@ import (
 	"github.com/brokentari/galvantula/internal/guardrails"
 )
 
+// goodTest is the one test that a passing product needs: the check requires
+// that at least one test runs.
+const goodTest = `package main
+
+import "testing"
+
+func TestOK(t *testing.T) {}
+`
+
 const goodMain = `package main
 
 import "fmt"
@@ -80,7 +89,7 @@ func TestAgentPassesCheckAndMerges(t *testing.T) {
 	// The agent also builds the program, which leaves a binary behind. It adds
 	// a binary test fixture, which must stay, and a link the runtime must not read.
 	// Its .gitignore matches main.go, which the check saw, so main must get it.
-	fakeAgent(t, writeFile("main.go", goodMain)+writeFile(".gitignore", "main.go\nbuilt\n")+"go build -o built .\n"+
+	fakeAgent(t, writeFile("main.go", goodMain)+writeFile("main_test.go", goodTest)+writeFile(".gitignore", "main.go\nbuilt\n")+"go build -o built .\n"+
 		"mkdir testdata && printf 'a\\000b' > testdata/sample.bin\nln -s /dev/zero zero\n")
 	res, err := run(Task{Node: impl, Attempt: 1})
 	if err != nil {
@@ -153,7 +162,7 @@ func TestCheckFailures(t *testing.T) {
 func TestAgentGitDirIsIgnored(t *testing.T) {
 	c, run := setUpRun(t)
 	marker := filepath.Join(t.TempDir(), "escaped")
-	fakeAgent(t, writeFile("main.go", goodMain)+
+	fakeAgent(t, writeFile("main.go", goodMain)+writeFile("main_test.go", goodTest)+
 		"rm .git && mkdir -p .git/objects .git/refs .git/hooks && echo 'ref: refs/heads/main' > .git/HEAD\n"+
 		"printf '[core]\\n\\trepositoryformatversion = 0\\n\\tfsmonitor = touch "+marker+"\\n' > .git/config\n"+
 		"printf '#!/bin/sh\\ntouch "+marker+"\\n' > .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit\n")
@@ -203,7 +212,7 @@ func TestFirstRetryResumesThenStartsOver(t *testing.T) {
 	args := filepath.Join(c.Root, "r", "home", "impl", "args")
 	first, _ := os.ReadFile(args)
 
-	fakeAgent(t, writeFile("main.go", goodMain))
+	fakeAgent(t, writeFile("main.go", goodMain)+writeFile("main_test.go", goodTest))
 	if _, err := run(Task{Node: impl, Attempt: 2, Resume: true, Feedback: err.Error()}); err != nil {
 		t.Fatal(err)
 	}

@@ -34,6 +34,9 @@ type plan struct {
 	red bool
 	// needs lists files that must exist when the agent is done.
 	needs []string
+	// minTests is how many tests must run, and pass, when the agent is done.
+	// A test binary that exits early with status 0 would otherwise pass.
+	minTests int
 	// skip returns a reason to skip the node without running an agent.
 	skip func(repo workspace.Repo) string
 	// after runs when the work is merged. It reports to the run's log.
@@ -126,6 +129,7 @@ var plans = map[string]plan{
 		model: func(m guardrails.Models) guardrails.Role { return m.Implementer },
 		brief: func(workspace.Repo, Task) (string, error) { return builderBrief, nil },
 		tools: tools, allow: allow, mode: "acceptEdits",
+		minTests: 1,
 	},
 	"architect": {
 		model: func(m guardrails.Models) guardrails.Role { return m.Architect },
@@ -136,12 +140,13 @@ var plans = map[string]plan{
 		after: logContract,
 	},
 	"implementer": {
-		model:  func(m guardrails.Models) guardrails.Role { return m.Implementer },
-		brief:  func(workspace.Repo, Task) (string, error) { return implementerBrief, nil },
-		tools:  tools,
-		allow:  allow,
-		mode:   "acceptEdits",
-		frozen: frozenForBuilders,
+		model:    func(m guardrails.Models) guardrails.Role { return m.Implementer },
+		brief:    func(workspace.Repo, Task) (string, error) { return implementerBrief, nil },
+		tools:    tools,
+		allow:    allow,
+		mode:     "acceptEdits",
+		frozen:   frozenForBuilders,
+		minTests: minTests,
 	},
 	"reviewer": {
 		model:    func(m guardrails.Models) guardrails.Role { return m.Reviewer },
@@ -151,13 +156,14 @@ var plans = map[string]plan{
 		readOnly: true,
 	},
 	"fixer": {
-		model:  func(m guardrails.Models) guardrails.Role { return m.Implementer },
-		brief:  fixBrief,
-		tools:  tools,
-		allow:  allow,
-		mode:   "acceptEdits",
-		frozen: frozenForBuilders,
-		skip:   nothingToFix,
+		model:    func(m guardrails.Models) guardrails.Role { return m.Implementer },
+		brief:    fixBrief,
+		tools:    tools,
+		allow:    allow,
+		mode:     "acceptEdits",
+		frozen:   frozenForBuilders,
+		skip:     nothingToFix,
+		minTests: minTests,
 	},
 }
 
@@ -212,10 +218,10 @@ func logContract(repo workspace.Repo, log func(string)) {
 	}
 }
 
-// skipCall matches any receiver, so it also matches a method named Skip and a
-// comment. shortcut: that can fail a test that does not skip, and the
-// implementer cannot edit it; the architect can rename the method. A narrower
-// match would let a contract skip its tests through another receiver name.
+// shortcut: skipCall matches any receiver, so a method named Skip or a comment
+// can fail a test that does not skip; narrow the match if that happens.
+// A narrower match now would let a contract skip its tests through another
+// receiver name, and the implementer cannot edit the architect's tests.
 var skipCall = regexp.MustCompile(`\.Skip(f|Now)?\(`)
 
 // noSkips fails if a test file in dir calls t.Skip: a skipped test does not

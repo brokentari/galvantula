@@ -98,7 +98,7 @@ type NodeFailedData struct {
 	Error     string       `json:"error"`
 	Class     FailureClass `json:"class"`
 	WillRetry bool         `json:"will_retry"`
-	// Abandoned means an advisory node failed for good. It counts as done, and the run goes on.
+	// Abandoned means an advisory node failed and will not retry. The node counts as done, and the run goes on.
 	Abandoned bool    `json:"abandoned,omitempty"`
 	CostUSD   float64 `json:"cost_usd,omitzero"`
 }

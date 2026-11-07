@@ -47,8 +47,9 @@ type Node struct {
 	// instructions and its check by role. An agent with no role builds the
 	// whole spec; a tool node with no role uses its id.
 	Role string `yaml:"role" json:"role,omitempty"`
-	// Advisory nodes cannot fail the run: if one fails for good, the run goes on.
-	// A review and the fix that follows it are advisory; the tests decide the outcome.
+	// A failure of an advisory node does not fail the run. The node is
+	// marked done after its last retry, and the run goes on. A review and the
+	// fix that answers it are advisory. The tests decide whether the run passes.
 	Advisory bool `yaml:"advisory" json:"advisory,omitzero"`
 }
 

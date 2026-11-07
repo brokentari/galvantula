@@ -180,6 +180,8 @@ func TestImplementerCannotChangeTheContract(t *testing.T) {
 		{"edits a test", writeFile("main.go", doneMain) + "echo '// edited' >> main_test.go\n", "must not change: main_test.go"},
 		{"edits the contract", writeFile("main.go", doneMain) + "echo more >> CONTRACT.md\n", "must not change: CONTRACT.md"},
 		{"deletes a test", writeFile("main.go", doneMain) + "rm main_test.go\n", "must not change: main_test.go"},
+		// An init that exits makes go test print ok with no test run.
+		{"exits before the tests run", writeFile("main.go", doneMain+"\nfunc init() { os.Exit(0) }\n") + "sed -i 's/^package main$/package main\\n\\nimport \"os\"/' main.go\n", "0 tests ran"},
 		{"skips in a new test", writeFile("main.go", doneMain) + writeFile("extra_test.go", skipping), "must not skip tests: extra_test.go"},
 	}
 	for _, tt := range tests {

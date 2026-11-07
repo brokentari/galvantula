@@ -346,16 +346,32 @@ func (c Claude) check(ctx context.Context, repo workspace.Repo, wt string, p pla
 		{"go", "fix", "-diff", "./..."},            // exits non-zero when it has a change to suggest
 		{"go", "build", "-o", os.DevNull, "./..."}, // a single main package would otherwise leave its binary here
 	}
-	if !p.red {
-		steps = append(steps, []string{"go", "test", "-count=1", "-timeout=2m", "./..."}) // a hung test fails the check, not the worker
-	}
 	errs = append(errs, runSteps(ctx, box, steps)...)
 	if p.red {
 		if err := c.red(ctx, box, log); err != nil {
 			errs = append(errs, err)
 		}
+	} else if err := testsPass(ctx, box, p.minTests, "-timeout=2m"); err != nil { // a hung test fails the check, not the worker
+		errs = append(errs, err)
 	}
 	return errors.Join(errs...)
+}
+
+// testsPass runs the tests and requires that at least min of them ran and
+// that none failed or skipped. Counting the tests matters: a test binary
+// that exits early with status 0, as an init function can make it do, would
+// otherwise pass with no test run.
+func testsPass(ctx context.Context, box sandbox.Spec, min int, flags ...string) error {
+	args := append([]string{"test", "-count=1", "-json"}, flags...)
+	out, _ := sandbox.Command(ctx, box, "go", append(args, "./...")...).CombinedOutput()
+	passed, failed, text := gotest.Count(string(out))
+	switch {
+	case failed > 0:
+		return fmt.Errorf("go test %s: %d of %d tests failed or skipped:\n%s", strings.Join(flags, " "), failed, passed+failed, gotest.Tail(text, 40))
+	case passed < min:
+		return fmt.Errorf("go test %s: %d tests ran; at least %d must. A test binary that exits early runs none:\n%s", strings.Join(flags, " "), passed, min, gotest.Tail(text, 20))
+	}
+	return nil
 }
 
 // runSteps runs each command in the sandbox and returns one error for each that fails.
@@ -420,8 +436,10 @@ func (c Claude) verify(ctx context.Context, repo workspace.Repo, log func(string
 		{"go", "vet", "./..."},
 		{"go", "fix", "-diff", "./..."},
 		{"go", "build", "-o", os.DevNull, "./..."},
-		{"go", "test", "-race", "-count=1", "-timeout=5m", "./..."},
 	})...)
+	if err := testsPass(ctx, box, minTests, "-race", "-timeout=5m"); err != nil {
+		errs = append(errs, err)
+	}
 	if err := errors.Join(errs...); err != nil {
 		return fmt.Errorf("verify failed:\n%w", err)
 	}
