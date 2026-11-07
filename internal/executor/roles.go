@@ -70,7 +70,7 @@ const implementerBrief = `Implement the program that spec.md describes, in this 
 
 - Fill in the stubs so that go test ./... passes.
 - Do not change or delete the tests (_test.go files), testdata, CONTRACT.md, spec.md, AGENTS.md, CLAUDE.md, go.mod or .factory/. The check fails if you do. You may add new test files for code that needs more tests.
-- If a test seems wrong, do not change it. Satisfy spec.md as well as you can, and say in NOTES.md which test you think is wrong and why.
+- If a test seems wrong, do not change it. The check cannot pass while a test fails, so the run will stop. Before you finish, say in NOTES.md which test you think is wrong and why, so that a person can fix the contract. Do not spend attempts on a test that spec.md contradicts.
 - Write NOTES.md: in a few lines, what you built and each assumption you made.
 ` + rules
 

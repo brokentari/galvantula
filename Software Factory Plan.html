@@ -801,7 +801,7 @@ factory_logs(node_id)     → transcript</pre>
       <div class="phase-head">
         <span class="layer">fixed graph</span>
         <h3>Hand-written factory pipeline</h3>
-        <p class="build">standards → architect → contract gate → implement → check → verify → review → fix. One implement node. The red-before-green check runs at the contract gate. The review node uses ponytail-review with the Prose group.</p>
+        <p class="build">standards → architect → contract gate → implement → review → fix → verify, in <code>graphs/phase2.yaml</code>. One implement node. The architect's tests must fail on its stubs (at least 5 tests, 80% failing, no skips), and no later node may change them. The review is advisory and uses ponytail-review with the Prose group; the fix node runs only if the review has findings, and neither can fail the run. Verify runs the whole suite with <code>-race</code> after the fix, and a verify failure fails the run: a fix after verify comes with replanning in phase 4. The gate shows the architect's contract in the log; a rejection ends the run for now, and sending your notes back to the architect comes later.</p>
       </div>
       <p class="done"><b>Done when</b>3 of 5 eval specs pass their hidden tests end to end.</p>
     </li>

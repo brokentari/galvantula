@@ -5,16 +5,16 @@ comes out. A Go runtime owns a graph of work. Claude Code runs each agent
 node. A React UI shows each run live. The full plan is in
 [Software Factory Plan.html](Software%20Factory%20Plan.html).
 
-**Status: phase 1 (one sandboxed agent) is done.** It passed its standards
-review (`docs/reviews/phase-1.md`, verdict "Ship." after 24 rounds). On the
-final code (commit ed690be) the hidden tests passed in 10 of 10 `wordfreq`
-runs, 10 of 10 `todo` runs and 9 of 10 `csvq` runs, at a median cost of
-$0.10, $0.12 and $0.22 per run, under the limit of $0.50
-(`evals/results/2026-11-06-ed690be.jsonl`). One more `csvq` run stopped at the
-account's usage limit; the file records it with `limited: true`, and it is not
-counted. The costs are Claude Code's estimates at API prices, not charges on
-a plan. An earlier batch on commit 5253e7d is in
-`evals/results/2026-11-06-5253e7d.jsonl`. Phase 0 passed its standards review
+**Status: phase 2 (the pipeline) is built.** On commit 83d02fb, with the
+full pipeline and no human at the gate, the hidden tests passed in 4 of 5
+evals: `wordfreq`, `todo`, `csvq` and `dedupe`
+(`evals/results/2026-11-07-83d02fb.jsonl`). `calc` failed because the
+architect wrote a wrong test, which no later node may change; the contract
+gate is meant to catch that, and an eval has no human to do it. Each run
+cost $0.32 to $0.84 by Claude Code's estimate at API prices, not a charge on
+a plan. Phase 1 (one sandboxed agent) passed its standards review and its
+final batch (`docs/reviews/phase-1.md`,
+`evals/results/2026-11-06-ed690be.jsonl`). Phase 0 passed its review too
 (`docs/reviews/phase-0.md`).
 
 ## Run the demo
@@ -56,6 +56,13 @@ export CLAUDE_CODE_OAUTH_TOKEN=...   # or ANTHROPIC_API_KEY=...
 go run ./cmd/factory serve
 go run ./cmd/factory start -spec evals/wordfreq/spec.md graphs/phase1.yaml
 ```
+
+`graphs/phase2.yaml` is the full pipeline: an architect writes the interfaces,
+the acceptance tests and `CONTRACT.md`; you approve the contract at a gate
+(the log shows it, and the file is in the run's repo); an implementer fills in
+the stubs and may not change the tests; a read-only review and a fix answer
+its findings; verify runs the whole suite with the race detector. Add
+`-auto-approve` to `factory start` to skip the gate, as the evals do.
 
 Each run's product is a git repo in `runs/<run>/repo`. The agent works in
 `runs/<run>/nodes/<node>`; the runtime commits and merges its work after the
