@@ -47,6 +47,11 @@ type Node struct {
 	// instructions and its check by role. An agent with no role builds the
 	// whole spec; a tool node with no role uses its id.
 	Role string `yaml:"role" json:"role,omitempty"`
+	// Scope lists the package directories an agent node may write files in,
+	// directly and not in their subfolders. Nodes that run in parallel get
+	// different directories, so their merges cannot conflict. An empty scope
+	// means no limit.
+	Scope []string `yaml:"scope" json:"scope,omitempty"`
 	// A failure of an advisory node does not fail the run. The node is
 	// marked done after its last retry, and the run goes on. A review and the
 	// fix that answers it are advisory. The tests decide whether the run passes.
@@ -57,6 +62,7 @@ type Node struct {
 var Roles = map[Kind][]string{
 	Agent: {"builder", "architect", "implementer", "reviewer", "fixer"},
 	Tool:  {"standards", "verify"},
+	Plan:  {"planner"},
 }
 
 var idPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
@@ -105,6 +111,9 @@ func (g Graph) Validate() error {
 		}
 		if n.Role != "" && !slices.Contains(Roles[n.Kind], n.Role) {
 			errs = append(errs, fmt.Errorf("node %q: role %q is not valid for a %s node", n.ID, n.Role, n.Kind))
+		}
+		if len(n.Scope) > 0 && n.Kind != Agent {
+			errs = append(errs, fmt.Errorf("node %q: only agent nodes may have a scope", n.ID))
 		}
 		if n.Advisory && n.Kind != Agent {
 			errs = append(errs, fmt.Errorf("node %q: only agent nodes may be advisory", n.ID))

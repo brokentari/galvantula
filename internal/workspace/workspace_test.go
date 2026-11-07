@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -68,5 +69,68 @@ func TestTrackedKeepsNonASCIINames(t *testing.T) {
 	must(t, err)
 	if !slices.Equal(got, []string{"café.go"}) {
 		t.Errorf("Tracked = %q, want [café.go]", got)
+	}
+}
+
+// Nodes work in parallel from the same main. The second to finish merges
+// into a main that moved, and must still merge, and Changed must compare
+// with where the node started, not with the new main.
+func TestParallelNodesMerge(t *testing.T) {
+	r, err := Open(filepath.Join(t.TempDir(), "repo"))
+	must(t, err)
+	must(t, os.WriteFile(filepath.Join(r.Dir, "base.txt"), []byte("base"), 0o644))
+	_, err = r.CommitAll(r.Dir, "base")
+	must(t, err)
+
+	a, err := r.Worktree("a")
+	must(t, err)
+	b, err := r.Worktree("b")
+	must(t, err)
+	must(t, os.MkdirAll(filepath.Join(a, "pkga"), 0o755))
+	must(t, os.MkdirAll(filepath.Join(b, "pkgb"), 0o755))
+	must(t, os.WriteFile(filepath.Join(a, "pkga", "a.go"), []byte("package a"), 0o644))
+	must(t, os.WriteFile(filepath.Join(b, "pkgb", "b.go"), []byte("package b"), 0o644))
+	_, err = r.CommitAll(a, "a")
+	must(t, err)
+	must(t, r.Merge("a"))
+	// b is checked before it commits, as in the executor, while main has moved on.
+	if changed, err := r.Changed(b); err != nil || len(changed) != 0 {
+		t.Errorf("Changed(b) = %v, %v; want nothing: b did not change a file that main had", changed, err)
+	}
+	_, err = r.CommitAll(b, "b")
+	must(t, err)
+	must(t, r.Merge("b"))
+	for _, f := range []string{"base.txt", "pkga/a.go", "pkgb/b.go"} {
+		if _, err := os.Stat(filepath.Join(r.Dir, f)); err != nil {
+			t.Errorf("main lacks %s after both merges", f)
+		}
+	}
+}
+
+// Two nodes that change the same file conflict. The merge must fail, name
+// the node, and leave main clean for the next one.
+func TestMergeConflictIsReportedAndAborted(t *testing.T) {
+	r, err := Open(filepath.Join(t.TempDir(), "repo"))
+	must(t, err)
+	must(t, os.WriteFile(filepath.Join(r.Dir, "f.txt"), []byte("base\n"), 0o644))
+	_, err = r.CommitAll(r.Dir, "base")
+	must(t, err)
+	a, err := r.Worktree("a")
+	must(t, err)
+	b, err := r.Worktree("b")
+	must(t, err)
+	must(t, os.WriteFile(filepath.Join(a, "f.txt"), []byte("from a\n"), 0o644))
+	must(t, os.WriteFile(filepath.Join(b, "f.txt"), []byte("from b\n"), 0o644))
+	for _, n := range []struct{ id, dir string }{{"a", a}, {"b", b}} {
+		_, err := r.CommitAll(n.dir, n.id)
+		must(t, err)
+	}
+	must(t, r.Merge("a"))
+	err = r.Merge("b")
+	if err == nil || !strings.Contains(err.Error(), "merge conflict: node b") {
+		t.Fatalf("got %v, want a conflict that names node b", err)
+	}
+	if status, _ := r.git(r.Dir, "status", "--porcelain"); status != "" {
+		t.Errorf("main is not clean after the aborted merge:\n%s", status)
 	}
 }

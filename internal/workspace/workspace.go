@@ -3,11 +3,13 @@
 package workspace
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 )
 
 // Repo is a product's repository. Main holds the merged work.
@@ -50,8 +52,20 @@ func (r Repo) Worktree(node string) (string, error) {
 	if _, err := os.Stat(dir); err == nil {
 		return dir, nil
 	}
+	unlock := r.lock()
+	defer unlock()
 	_, err := r.git(r.Dir, "worktree", "add", "-q", "-B", "node/"+node, dir, "main")
 	return dir, err
+}
+
+// repoLocks serialize the commands that change the repo's shared state:
+// adding a worktree and merging. Nodes run in parallel and call them at once.
+var repoLocks sync.Map // repo dir -> *sync.Mutex
+
+func (r Repo) lock() (unlock func()) {
+	m, _ := repoLocks.LoadOrStore(r.Dir, &sync.Mutex{})
+	m.(*sync.Mutex).Lock()
+	return m.(*sync.Mutex).Unlock
 }
 
 // Reset puts a worktree back to main and removes every file main does not have.
@@ -66,7 +80,13 @@ func (r Repo) Reset(dir string) error {
 // Changed lists files that main has and dir has changed or deleted,
 // committed or not. New files are not listed.
 func (r Repo) Changed(dir string) ([]string, error) {
-	out, err := r.git(dir, "diff", "--name-only", "-z", "main", "--", ".")
+	// Compare with the commit the node started from, not with main as it is
+	// now: other nodes merge into main while this one works.
+	base, err := r.git(dir, "merge-base", "HEAD", "main")
+	if err != nil {
+		return nil, err
+	}
+	out, err := r.git(dir, "diff", "--name-only", "-z", strings.TrimSpace(base), "--", ".")
 	return names(out), err
 }
 
@@ -91,10 +111,17 @@ func names(out string) []string {
 	return strings.FieldsFunc(out, func(r rune) bool { return r == 0 })
 }
 
-// Merge moves main forward to a node's branch.
+// Merge merges a node's branch into main. It fast-forwards when it can. When other
+// nodes merged first it makes a merge commit, which cannot conflict if the
+// nodes wrote different files, as their scopes require.
 func (r Repo) Merge(node string) error {
-	_, err := r.git(r.Dir, "merge", "-q", "--ff-only", "node/"+node)
-	return err
+	unlock := r.lock()
+	defer unlock()
+	if _, err := r.git(r.Dir, "merge", "-q", "--no-edit", "node/"+node); err != nil {
+		_, abort := r.git(r.Dir, "merge", "--abort")
+		return fmt.Errorf("merge conflict: node %s: %w", node, errors.Join(err, abort))
+	}
+	return nil
 }
 
 // git runs git in dir on the host. An agent can write anything in its

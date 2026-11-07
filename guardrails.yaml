@@ -14,8 +14,8 @@ budget:
 # the hidden tests that judge the factory, so it must be a model the factory
 # does not use for anything else.
 models:
-  architect:   { model: claude-sonnet-5-5, effort: high }
-  planner:     { model: claude-sonnet-5-5, effort: high }
+  architect:   { model: claude-sonnet-5-5, effort: medium }
+  planner:     { model: claude-sonnet-5-5, effort: medium }
   implementer: { model: claude-sonnet-5-5, effort: medium }
-  reviewer:    { model: claude-sonnet-5-5, effort: high }
+  reviewer:    { model: claude-sonnet-5-5, effort: medium }
   eval_author: { model: claude-opus-5-5,   effort: xhigh }

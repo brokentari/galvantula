@@ -19,7 +19,6 @@ import (
 	"github.com/brokentari/galvantula/internal/gotest"
 	"github.com/brokentari/galvantula/internal/graph"
 	"github.com/brokentari/galvantula/internal/guardrails"
-	"github.com/brokentari/galvantula/internal/review"
 	"github.com/brokentari/galvantula/internal/sandbox"
 	"github.com/brokentari/galvantula/internal/workspace"
 	"github.com/brokentari/galvantula/standards"
@@ -58,7 +57,7 @@ func (c Claude) Run(ctx context.Context, t Task, log func(string)) (Result, erro
 		return Result{}, c.writeStandards(repo, log)
 	case t.Node.Kind == graph.Tool && role == "verify":
 		return Result{}, c.verify(ctx, repo, log)
-	case t.Node.Kind == graph.Agent:
+	case t.Node.Kind == graph.Agent || t.Node.Kind == graph.Plan:
 		return c.agent(ctx, repo, t, log)
 	}
 	return Result{}, fmt.Errorf("the claude executor cannot run %s node %q", t.Node.Kind, t.Node.ID)
@@ -101,8 +100,17 @@ func (c Claude) writeStandards(repo workspace.Repo, log func(string)) error {
 	return err
 }
 
+// roleName returns a node's role. An agent with none builds the whole spec,
+// and a plan node plans.
+func roleName(n graph.Node) string {
+	if n.Kind == graph.Plan {
+		return cmp.Or(n.Role, "planner")
+	}
+	return cmp.Or(n.Role, "builder")
+}
+
 func (c Claude) agent(ctx context.Context, repo workspace.Repo, t Task, log func(string)) (Result, error) {
-	p, ok := plans[cmp.Or(t.Node.Role, "builder")]
+	p, ok := plans[roleName(t.Node)]
 	if !ok {
 		return Result{}, fmt.Errorf("node %q has no role the executor knows", t.Node.ID)
 	}
@@ -140,7 +148,7 @@ func (c Claude) agent(ctx context.Context, repo workspace.Repo, t Task, log func
 	box.RO = append(box.RO, bin)
 	system := filepath.Join(wt, "AGENTS.md")
 	if p.readOnly {
-		if system, err = c.readOnlyAgent(&box, wt, home); err != nil {
+		if system, err = c.readOnlyAgent(&box, wt, home, p.system); err != nil {
 			return Result{}, err
 		}
 	}
@@ -166,7 +174,7 @@ func (c Claude) agent(ctx context.Context, repo workspace.Repo, t Task, log func
 	session := filepath.Join(sessions, t.Node.ID)
 	if id, err := os.ReadFile(session); t.Resume && err == nil {
 		opts.Resume = string(id)
-		opts.Prompt = "The factory's check failed:\n\n" + t.Feedback + "\n\nFix the code so the check passes."
+		opts.Prompt = "The factory found a problem with your last result:\n\n" + t.Feedback + "\n\nFix it."
 		log("resume the last session")
 	} else {
 		if err := repo.Reset(wt); err != nil {
@@ -208,11 +216,9 @@ func (c Claude) agent(ctx context.Context, repo workspace.Repo, t Task, log func
 	}
 
 	if p.readOnly {
-		if err := saveReview(repo, res.Text); err != nil {
-			return spent, err
-		}
-		log("review: " + review.Verdict(res.Text))
-		return spent, nil
+		nodes, err := p.report(c, repo, res.Text, log)
+		spent.Nodes = nodes
+		return spent, err
 	}
 
 	// Remove build output first, so the check sees what main will get.
@@ -220,7 +226,7 @@ func (c Claude) agent(ctx context.Context, repo workspace.Repo, t Task, log func
 		return spent, &InfraError{Err: err}
 	}
 	log("check")
-	if err := c.check(ctx, repo, wt, p, log); err != nil {
+	if err := c.check(ctx, repo, wt, t.Node, p, log); err != nil {
 		return spent, fmt.Errorf("check failed:\n%w", err)
 	}
 	if _, err := repo.CommitAll(wt, fmt.Sprintf("%s: attempt %d", t.Node.ID, t.Attempt)); err != nil {
@@ -239,10 +245,10 @@ func (c Claude) agent(ctx context.Context, repo workspace.Repo, t Task, log func
 // readOnlyAgent makes the worktree read-only in the box, so that a reviewer
 // cannot change the code, and writes the reviewer's instructions. It returns
 // the path of that file.
-func (c Claude) readOnlyAgent(box *sandbox.Spec, wt, home string) (string, error) {
+func (c Claude) readOnlyAgent(box *sandbox.Spec, wt, home string, instructions func(string) (string, error)) (string, error) {
 	box.RW = slices.DeleteFunc(box.RW, func(d string) bool { return d == wt })
 	box.RO = append(box.RO, wt)
-	text, err := reviewSystem(c.Rails.Go.Version)
+	text, err := instructions(c.Rails.Go.Version)
 	if err != nil {
 		return "", err
 	}
@@ -320,11 +326,22 @@ func hasNUL(path string) (bool, error) {
 
 // check runs the factory's checks on a worktree. Build and test run the
 // agent's code, so they run in the sandbox too, without any credential.
-func (c Claude) check(ctx context.Context, repo workspace.Repo, wt string, p plan, log func(string)) error {
+func (c Claude) check(ctx context.Context, repo workspace.Repo, wt string, node graph.Node, p rolePlan, log func(string)) error {
 	var errs []error
 	changed, err := repo.Changed(wt)
 	if err != nil {
 		return &InfraError{Err: err}
+	}
+	if len(node.Scope) > 0 {
+		// The node may write only in its packages. Other nodes write the rest at
+		// the same time, and a file in both would conflict at the merge.
+		fresh, err := repo.NewFiles(wt)
+		if err != nil {
+			return &InfraError{Err: err}
+		}
+		if out := outsideScope(node, slices.Concat(changed, fresh)); len(out) > 0 {
+			errs = append(errs, fmt.Errorf("these files are outside your scope (%s): %s", strings.Join(node.Scope, ", "), strings.Join(out, ", ")))
+		}
 	}
 	if p.frozen != nil {
 		changed = slices.DeleteFunc(changed, func(f string) bool { return !p.frozen(f) })
@@ -355,8 +372,11 @@ func (c Claude) check(ctx context.Context, repo workspace.Repo, wt string, p pla
 		if err := c.red(ctx, box, log); err != nil {
 			errs = append(errs, err)
 		}
-	} else if err := testsPass(ctx, box, p.minTests, "-timeout=2m"); err != nil { // a hung test fails the check, not the worker
-		errs = append(errs, err)
+	} else {
+		pkgs, min := testTargets(wt, node, p.minTests)
+		if err := testsPass(ctx, box, min, pkgs, "-timeout=2m"); err != nil { // a hung test fails the check, not the worker
+			errs = append(errs, err)
+		}
 	}
 	return errors.Join(errs...)
 }
@@ -365,9 +385,9 @@ func (c Claude) check(ctx context.Context, repo workspace.Repo, wt string, p pla
 // that none failed or skipped. Counting the tests matters: a test binary
 // that exits early with status 0, as an init function can make it do, would
 // otherwise pass with no test run.
-func testsPass(ctx context.Context, box sandbox.Spec, min int, flags ...string) error {
+func testsPass(ctx context.Context, box sandbox.Spec, min int, pkgs []string, flags ...string) error {
 	args := append([]string{"test", "-count=1", "-json"}, flags...)
-	out, err := sandbox.Command(ctx, box, "go", append(args, "./...")...).CombinedOutput()
+	out, err := sandbox.Command(ctx, box, "go", append(args, pkgs...)...).CombinedOutput()
 	passed, failed, text := gotest.Count(string(out))
 	switch {
 	case failed > 0:
@@ -439,7 +459,7 @@ func (c Claude) verify(ctx context.Context, repo workspace.Repo, log func(string
 		errs = append(errs, fmt.Errorf("go.mod must say go %s", c.Rails.Go.Version))
 	}
 	errs = append(errs, runSteps(ctx, box, baseSteps)...)
-	if err := testsPass(ctx, box, minTests, "-race", "-timeout=5m"); err != nil {
+	if err := testsPass(ctx, box, minTests, []string{"./..."}, "-race", "-timeout=5m"); err != nil {
 		errs = append(errs, err)
 	}
 	if err := errors.Join(errs...); err != nil {

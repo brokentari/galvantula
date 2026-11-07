@@ -8,15 +8,16 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/brokentari/galvantula/internal/graph"
 	"github.com/brokentari/galvantula/internal/guardrails"
 	"github.com/brokentari/galvantula/internal/review"
 	"github.com/brokentari/galvantula/internal/workspace"
 	"github.com/brokentari/galvantula/standards"
 )
 
-// plan says what one role of agent does: which model it uses, what it may
+// rolePlan says what one role of agent does: which model it uses, what it may
 // touch, how it is briefed and how its work is checked.
-type plan struct {
+type rolePlan struct {
 	model func(guardrails.Models) guardrails.Role
 	// brief returns the prompt for a first attempt.
 	brief func(repo workspace.Repo, t Task) (string, error)
@@ -37,6 +38,11 @@ type plan struct {
 	// minTests is how many tests must run, and pass, when the agent is done.
 	// A test binary that exits early with status 0 would otherwise pass.
 	minTests int
+	// system builds the instructions of a read-only agent.
+	system func(goVersion string) (string, error)
+	// report handles the final text of a read-only agent. It may return the
+	// nodes of a task graph, for the planner.
+	report func(c Claude, repo workspace.Repo, text string, log func(string)) ([]graph.Node, error)
 	// skip returns a reason to skip the node without running an agent.
 	skip func(repo workspace.Repo) string
 	// after runs when the work is merged. It reports to the run's log.
@@ -77,7 +83,6 @@ const implementerBrief = `Implement the program that spec.md describes, in this 
 - Fill in the stubs so that go test ./... passes.
 - Do not change or delete the tests (_test.go files), testdata, CONTRACT.md, spec.md, AGENTS.md, CLAUDE.md, go.mod or .factory/. The check fails if you do. You may add new test files for code that needs more tests.
 - If a test seems wrong, do not change it. The check cannot pass while a test fails, so the run will stop. Before you finish, say in NOTES.md which test you think is wrong and why, so that a person can fix the contract. Do not spend attempts on a test that spec.md contradicts.
-- Write NOTES.md: in a few lines, what you built and each assumption you made.
 ` + rules
 
 const fixerBrief = `A reviewer found problems in the program in this directory. The review report is below. Fix every Must fix and Should fix finding, and every finding in the Prose group. Do not act on Nice to have items. AGENTS.md, which is part of your instructions, holds the rules for the code and its prose.
@@ -128,7 +133,7 @@ func testFile(path string) bool {
 
 func frozenForBuilders(path string) bool { return standardsFile(path) || testFile(path) }
 
-var plans = map[string]plan{
+var plans = map[string]rolePlan{
 	"builder": {
 		model: func(m guardrails.Models) guardrails.Role { return m.Implementer },
 		brief: func(workspace.Repo, Task) (string, error) { return builderBrief, nil },
@@ -145,7 +150,7 @@ var plans = map[string]plan{
 	},
 	"implementer": {
 		model:    func(m guardrails.Models) guardrails.Role { return m.Implementer },
-		brief:    func(workspace.Repo, Task) (string, error) { return implementerBrief, nil },
+		brief:    func(_ workspace.Repo, t Task) (string, error) { return implementerBrief + implementerNotes(t), nil },
 		tools:    tools,
 		allow:    allow,
 		mode:     "acceptEdits",
@@ -158,6 +163,17 @@ var plans = map[string]plan{
 		tools:    []string{"Read", "Glob", "Grep"},
 		mode:     "dontAsk", // anything not listed in tools is refused
 		readOnly: true,
+		system:   reviewSystem,
+		report:   reviewReport,
+	},
+	"planner": {
+		model:    func(m guardrails.Models) guardrails.Role { return m.Planner },
+		brief:    plannerPrompt,
+		tools:    []string{"Read", "Glob", "Grep"},
+		mode:     "dontAsk",
+		readOnly: true,
+		system:   planSystem,
+		report:   planReport,
 	},
 	"fixer": {
 		model:    func(m guardrails.Models) guardrails.Role { return m.Implementer },
@@ -295,6 +311,24 @@ const (
 	minTests = 5
 	minRed   = 0.8
 )
+
+// reviewReport saves the review on main and logs its verdict.
+func reviewReport(_ Claude, repo workspace.Repo, text string, log func(string)) ([]graph.Node, error) {
+	if err := saveReview(repo, text); err != nil {
+		return nil, err
+	}
+	log("review: " + review.Verdict(text))
+	return nil, nil
+}
+
+// planSystem builds the planner's instructions: the standards, and its role.
+func planSystem(goVersion string) (string, error) {
+	block, err := standards.Render(goVersion)
+	if err != nil {
+		return "", err
+	}
+	return block + "\nYou plan the parallel build of a program that an agent team will write. You can read files but not run commands. Your final answer is read by a program, so it must be only the JSON object that the task asks for.\n", nil
+}
 
 // reviewSystem builds the reviewer's instructions: the standards, the review
 // rules and the ponytail-review skill.

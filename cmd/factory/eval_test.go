@@ -245,3 +245,27 @@ func TestHiddenTestsScoreAProduct(t *testing.T) {
 		t.Errorf("a product without its program passed %d hidden tests", passed)
 	}
 }
+
+// Two tasks that overlap in time count as 2 in parallel; a failure that
+// names a merge conflict is counted.
+func TestParallelism(t *testing.T) {
+	g := graph.Graph{Name: "g", Nodes: []graph.Node{{ID: "architect", Kind: graph.Agent}, {ID: "plan", Kind: graph.Plan}}}
+	filled := graph.Graph{Name: "g", Nodes: []graph.Node{{ID: "architect", Kind: graph.Agent}, {ID: "a", Kind: graph.Agent}, {ID: "b", Kind: graph.Agent}}}
+	ev := func(typ event.Type, node string, data any) event.Event { return event.New("r", typ, node, 1, data) }
+	evs := []event.Event{
+		ev(event.RunCreated, "", event.RunCreatedData{Graph: g}),
+		ev(event.NodeStarted, "architect", nil),
+		ev(event.NodeSucceeded, "architect", nil),
+		ev(event.GraphUpdated, "plan", event.GraphUpdatedData{Graph: filled, Reason: "x"}),
+		ev(event.NodeStarted, "a", nil),
+		ev(event.NodeStarted, "b", nil), // a and b run at once
+		ev(event.NodeSucceeded, "a", nil),
+		ev(event.NodeFailed, "b", event.NodeFailedData{Error: "merge conflict: node b", Class: event.Task}),
+	}
+	if maxRunning, conflicts := parallelism(evs, g); maxRunning != 2 || conflicts != 1 {
+		t.Errorf("parallelism = %d, %d; want 2 and 1", maxRunning, conflicts)
+	}
+	if maxRunning, _ := parallelism(evs[:5], g); maxRunning != 1 {
+		t.Errorf("with only a started, parallelism = %d, want 1", maxRunning)
+	}
+}

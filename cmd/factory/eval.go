@@ -47,6 +47,41 @@ type evalResult struct {
 	Minutes       float64   `json:"minutes"`
 	Attempts      int       `json:"attempts"`
 	Limited       bool      `json:"limited,omitzero"` // stopped by the account's usage limit
+	// MaxParallel is the most agent nodes that ran at the same time. Tasks
+	// from a plan should make it 2 or more.
+	MaxParallel    int `json:"max_parallel,omitzero"`
+	MergeConflicts int `json:"merge_conflicts,omitzero"`
+}
+
+// parallelism returns the most agent nodes that ran at once, and how many
+// attempts failed on a merge conflict, from a run's events.
+func parallelism(evs []event.Event, g graph.Graph) (maxRunning, conflicts int) {
+	kind := map[string]graph.Kind{}
+	for _, n := range g.Nodes {
+		kind[n.ID] = n.Kind
+	}
+	running := map[string]bool{}
+	for _, e := range evs {
+		switch e.Type {
+		case event.GraphUpdated:
+			if d, err := e.Decode[event.GraphUpdatedData](); err == nil {
+				for _, n := range d.Graph.Nodes {
+					kind[n.ID] = n.Kind
+				}
+			}
+		case event.NodeStarted:
+			if kind[e.Node] == graph.Agent {
+				running[e.Node] = true
+				maxRunning = max(maxRunning, len(running))
+			}
+		case event.NodeSucceeded, event.NodeFailed:
+			delete(running, e.Node)
+			if d, err := e.Decode[event.NodeFailedData](); err == nil && e.Type == event.NodeFailed && strings.Contains(d.Error, "merge conflict") {
+				conflicts++
+			}
+		}
+	}
+	return maxRunning, conflicts
 }
 
 // runEvals runs each eval n times through the server, scores each product
@@ -199,6 +234,7 @@ func evalOnce(store *event.Store, addr, root, dir, g string) (evalResult, error)
 		Implementer:   st.Rails.Models.Implementer.Model + " at " + st.Rails.Models.Implementer.Effort,
 		ClaudeVersion: claude.Version(),
 	}
+	r.MaxParallel, r.MergeConflicts = parallelism(evs, graphOf(evs, st))
 	for _, n := range st.Graph.Nodes {
 		ns := st.Nodes[n.ID]
 		if n.Kind == graph.Agent {
@@ -293,4 +329,12 @@ func median(xs []float64) float64 {
 		return (xs[m-1] + xs[m]) / 2
 	}
 	return xs[m]
+}
+
+// graphOf returns the graph as the run started it, before a plan changed it.
+func graphOf(evs []event.Event, st *event.State) graph.Graph {
+	if d, err := evs[0].Decode[event.RunCreatedData](); err == nil {
+		return d.Graph
+	}
+	return st.Graph
 }

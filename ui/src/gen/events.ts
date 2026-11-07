@@ -37,6 +37,7 @@ export interface GraphNode {
   retries?: number;
   filled_by?: string;
   role?: string;
+  scope?: string[];
   advisory?: boolean;
 }
 
