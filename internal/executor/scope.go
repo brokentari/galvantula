@@ -72,7 +72,7 @@ Split the work into tasks, one per builder. Rules:
 - The scope lists package directories, such as "internal/store". Every package below must be in the scope of exactly one task. Do not add a package that is not in the list.
 - deps lists the ids of tasks that must finish first. A builder starts only after its deps are merged. Give a task a dep only if its tests need the other package to work for real, or if it must call code that the other task writes. Packages with no such need get no dep, so that builders run at the same time. A task may depend on tasks only, never on itself.
 - At most %d tasks. At most %d tasks in the longest chain of deps. Keep the plan small: one task for a package that is small, and do not split a package.
-- Do not use the ids standards, architect, plan, review, fix, verify or any id that is a package directory name of a gate.
+- Do not use the ids standards, architect, plan, tasks, review, fix or verify, or an id that starts with approve-. Other nodes have them.
 
 Answer with a JSON object and nothing else, in this shape:
 

@@ -168,11 +168,9 @@ func TestScopeViolations(t *testing.T) {
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("got %v, want a refusal that names %q", err, tt.want)
 			}
-			if _, err := os.Stat(filepath.Join(c.Root, "r", "repo", "pkga", "a.go")); err == nil && !strings.Contains(tt.name, "stub") {
-				// A failed node must not reach main.
-				if got, _ := os.ReadFile(filepath.Join(c.Root, "r", "repo", "pkga", "a.go")); strings.Contains(string(got), "n + 1") {
-					t.Error("refused work was merged")
-				}
+			// Refused work must not reach main: pkga/a.go is still the stub.
+			if got, _ := os.ReadFile(filepath.Join(c.Root, "r", "repo", "pkga", "a.go")); strings.Contains(string(got), "n + 1") {
+				t.Error("refused work was merged")
 			}
 		})
 	}
