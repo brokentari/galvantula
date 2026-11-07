@@ -324,22 +324,13 @@ func (c Claude) check(ctx context.Context, repo workspace.Repo, wt string, p pla
 	if err := noSkips(wt); err != nil {
 		errs = append(errs, err)
 	}
-	home, err := os.MkdirTemp("", "check-home")
+	// Not the agent's cache or home: Go caches vet and fix results too, and
+	// the agent must not be able to plant a clean result for its own code.
+	box, cleanup, err := c.readOnlyBox(wt)
 	if err != nil {
 		return &InfraError{Err: err}
 	}
-	defer os.RemoveAll(home)
-	// Not the agent's cache: Go caches vet and fix results too, and the agent
-	// must not be able to plant a clean result for its own code.
-	cache, err := c.newCache()
-	if err != nil {
-		return &InfraError{Err: err}
-	}
-	defer os.RemoveAll(cache)
-	box := c.box(cache, wt, home, nil)
-	// The checks run the agent's code. It must not change what the runtime commits.
-	box.RW = slices.DeleteFunc(box.RW, func(p string) bool { return p == wt })
-	box.RO = append(box.RO, wt)
+	defer cleanup()
 	errs = append(errs, runSteps(ctx, box, baseSteps)...)
 	if p.red {
 		if err := c.red(ctx, box, log); err != nil {
@@ -412,19 +403,11 @@ func (c Claude) red(ctx context.Context, box sandbox.Spec, log func(string)) err
 // verify is the last step: the whole suite with the race detector, on what
 // is on main, and a check that go.mod still names no module.
 func (c Claude) verify(ctx context.Context, repo workspace.Repo, log func(string)) error {
-	home, err := os.MkdirTemp("", "verify-home")
+	box, cleanup, err := c.readOnlyBox(repo.Dir)
 	if err != nil {
 		return &InfraError{Err: err}
 	}
-	defer os.RemoveAll(home)
-	cache, err := c.newCache()
-	if err != nil {
-		return &InfraError{Err: err}
-	}
-	defer os.RemoveAll(cache)
-	box := c.box(cache, repo.Dir, home, nil)
-	box.RW = slices.DeleteFunc(box.RW, func(p string) bool { return p == repo.Dir })
-	box.RO = append(box.RO, repo.Dir)
+	defer cleanup()
 
 	var errs []error
 	mod, err := os.ReadFile(filepath.Join(repo.Dir, "go.mod"))
@@ -445,6 +428,25 @@ func (c Claude) verify(ctx context.Context, repo workspace.Repo, log func(string
 	}
 	log("verify passed: the suite passes with -race")
 	return nil
+}
+
+// readOnlyBox is the sandbox for the checks, which run the agent's code. The
+// directory is read-only, so that code cannot change what the runtime commits.
+// Each call gets a new home and a new build cache. cleanup deletes them.
+func (c Claude) readOnlyBox(dir string) (box sandbox.Spec, cleanup func(), err error) {
+	home, err := os.MkdirTemp("", "check-home")
+	if err != nil {
+		return box, nil, err
+	}
+	cache, err := c.newCache()
+	if err != nil {
+		os.RemoveAll(home)
+		return box, nil, err
+	}
+	box = c.box(cache, dir, home, nil)
+	box.RW = slices.DeleteFunc(box.RW, func(p string) bool { return p == dir })
+	box.RO = append(box.RO, dir)
+	return box, func() { os.RemoveAll(home); os.RemoveAll(cache) }, nil
 }
 
 // box is the sandbox for one worktree, with the Go settings the factory needs.

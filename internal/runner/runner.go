@@ -27,6 +27,9 @@ const (
 	maxBackoff = 2 * time.Minute
 )
 
+// autoApproved is the note on a gate decision that the runtime made, for a run with no human.
+const autoApproved = "approved by the runtime: this run has no human"
+
 // ErrInvalid wraps the errors Start returns for a run that cannot start.
 var ErrInvalid = errors.New("invalid run")
 
@@ -239,7 +242,7 @@ func (r *Runner) drive(id string, a *active) error {
 	if st.AutoApprove {
 		for _, n := range st.Graph.Nodes {
 			if st.Nodes[n.ID].Status == event.Waiting {
-				d := event.GateDecidedData{Approved: true, Notes: "approved by the runtime: this run has no human"}
+				d := event.GateDecidedData{Approved: true, Notes: autoApproved}
 				if err := emit(event.New(id, event.GateDecided, n.ID, 0, d)); err != nil {
 					return err
 				}
@@ -271,7 +274,7 @@ func (r *Runner) drive(id string, a *active) error {
 						return err
 					}
 					if st.AutoApprove {
-						d := event.GateDecidedData{Approved: true, Notes: "approved by the runtime: this run has no human"}
+						d := event.GateDecidedData{Approved: true, Notes: autoApproved}
 						if err := emit(event.New(id, event.GateDecided, n.ID, 0, d)); err != nil {
 							return err
 						}

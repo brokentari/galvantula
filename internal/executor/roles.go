@@ -106,8 +106,9 @@ You can read files but not run commands. Your report is advisory: tests, not you
 
 `
 
-// standardsFile reports whether a path is a file the standards node wrote,
-// spec.md, go.mod or CONTRACT.md.
+// standardsFile reports whether a path is a file that the implementer and
+// the fixer may not change: the standards node's files, .factory/, and the
+// architect's CONTRACT.md.
 func standardsFile(path string) bool {
 	switch path {
 	case "AGENTS.md", "CLAUDE.md", "spec.md", "go.mod", "CONTRACT.md":
