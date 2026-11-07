@@ -87,10 +87,10 @@ var impl = graph.Node{ID: "impl", Kind: graph.Agent}
 func TestAgentPassesCheckAndMerges(t *testing.T) {
 	c, run := setUpRun(t)
 	// The agent also builds the program, which leaves a binary behind. It adds
-	// a binary test fixture, which must stay, and a link the runtime must not read.
+	// a binary test fixture, which must stay.
 	// Its .gitignore matches main.go, which the check saw, so main must get it.
 	fakeAgent(t, writeFile("main.go", goodMain)+writeFile("main_test.go", goodTest)+writeFile(".gitignore", "main.go\nbuilt\n")+"go build -o built .\n"+
-		"mkdir testdata && printf 'a\\000b' > testdata/sample.bin\nln -s /dev/zero zero\n")
+		"mkdir testdata && printf 'a\\000b' > testdata/sample.bin\n")
 	res, err := run(Task{Node: impl, Attempt: 1})
 	if err != nil {
 		t.Fatal(err)

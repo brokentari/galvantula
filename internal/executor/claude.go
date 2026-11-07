@@ -337,6 +337,9 @@ func (c Claude) check(ctx context.Context, repo workspace.Repo, wt string, p pla
 			errs = append(errs, fmt.Errorf("%s must exist and not be empty", f))
 		}
 	}
+	if err := noLinks(wt); err != nil {
+		return err // nothing else reads files that a link could redirect
+	}
 	if err := noSkips(wt); err != nil {
 		errs = append(errs, err)
 	}

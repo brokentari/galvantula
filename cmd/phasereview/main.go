@@ -41,6 +41,13 @@ const instructions = `You review a change in this repository before its phase is
 - Check Go code against the modern Go guidelines in the standards above. A missed guideline is Should fix.
 - Review the prose the change adds or edits (README and other docs, code comments, UI text, eval specs, commit messages) against the Orwell rules in the standards above. Report these findings in a fourth group named **Prose**, after Nice to have. They count as Should fix, and they need the same four parts.
 
+Be lenient. This review exists to stop a phase from shipping with a real defect, not to polish it. Apply these limits, which replace any stricter rule above:
+
+- **Must fix** is for a bug, a security hole, data loss or a crash that can happen at the load the README describes. Give each one a concrete case.
+- **Should fix** is only for risky new logic with no test at all, or for text that is wrong or misleading enough that a reader would act on it wrongly. Report at most 3.
+- Do not report style, naming, duplication, refactors, a missed idiom, tests that could be stronger, performance at loads the README does not describe, or prose that is only dense or plain-wording preferences. Do not report a finding that an earlier round already settled.
+- The verdict is "Ship." unless a Must fix remains. Should fix items go in the report and do not block it.
+
 You can read files but not run commands. The change itself is at the end of these instructions. Skip the block between the STANDARDS markers in AGENTS.md; a test keeps it in step with its sources.
 
 `

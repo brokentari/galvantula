@@ -222,10 +222,37 @@ func logContract(repo workspace.Repo, log func(string)) {
 	}
 }
 
+// noLinks fails if dir holds a symbolic link. The runtime reads and writes
+// files that agents make, such as CONTRACT.md and .factory/review.md, outside
+// the sandbox. A link there could hang the server or send a write to another
+// file. Agents have no need for links, so the check refuses them all.
+func noLinks(dir string) error {
+	var bad []string
+	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() && d.Name() == ".git" {
+			return filepath.SkipDir
+		}
+		if d.Type()&fs.ModeSymlink != 0 {
+			rel, _ := filepath.Rel(dir, path)
+			bad = append(bad, rel)
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if len(bad) > 0 {
+		return fmt.Errorf("symbolic links are not allowed: %s", strings.Join(bad, ", "))
+	}
+	return nil
+}
+
 // shortcut: skipCall matches any receiver, so a method named Skip or a comment
-// can fail a test that does not skip; narrow the match if that happens.
-// A narrower match now would let a contract skip its tests through another
-// receiver name, and the implementer cannot edit the architect's tests.
+// can fail a test that skips nothing. Narrow it if that happens. Keep it wide
+// otherwise: a narrow match lets a contract skip tests through another receiver name.
 var skipCall = regexp.MustCompile(`\.Skip(f|Now)?\(`)
 
 // noSkips fails if a test file in dir calls t.Skip: a skipped test does not
@@ -239,7 +266,8 @@ func noSkips(dir string) error {
 		if d.IsDir() && (d.Name() == ".git" || d.Name() == ".factory") {
 			return filepath.SkipDir
 		}
-		if d.IsDir() || !strings.HasSuffix(path, "_test.go") {
+		// A link would make ReadFile read what it points to, such as /dev/zero.
+		if !d.Type().IsRegular() || !strings.HasSuffix(path, "_test.go") {
 			return nil
 		}
 		data, err := os.ReadFile(path)

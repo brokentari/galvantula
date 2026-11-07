@@ -321,3 +321,24 @@ func TestArchitectBriefStatesTheRule(t *testing.T) {
 		}
 	}
 }
+
+// The runtime reads and writes some files that agents make, outside the
+// sandbox. A link there must fail the check at once. It must not hang the
+// runtime, as a read of /dev/zero would, or redirect the review report.
+func TestLinksFailTheCheck(t *testing.T) {
+	for name, link := range map[string]string{
+		"a link named like a test":    "ln -s /dev/zero zero_test.go",
+		"a link in place of a report": "mkdir -p .factory && ln -s /etc/hostname .factory/review.md",
+		"a link to a directory":       "ln -s /tmp tmplink",
+	} {
+		t.Run(name, func(t *testing.T) {
+			c, _ := setUpRun(t)
+			fakeAgents(t, map[string]string{"architect": architectWork(6), "implement": writeFile("main.go", doneMain) + link + "\n"})
+			mustRun(t, c, architect)
+			_, _, err := runNode(t, c, "implement", "implementer")
+			if err == nil || !strings.Contains(err.Error(), "symbolic links are not allowed") {
+				t.Fatalf("got %v, want a refusal of the link", err)
+			}
+		})
+	}
+}
