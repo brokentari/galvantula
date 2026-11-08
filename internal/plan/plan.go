@@ -61,6 +61,9 @@ func Validate(out Output, packages []string) error {
 	}
 	owner := map[string]string{} // package dir -> task id
 	for _, t := range out.Tasks {
+		if strings.HasPrefix(t.ID, "replan-") {
+			errs = append(errs, fmt.Errorf("task %q: ids that start with replan- are for the runtime", t.ID))
+		}
 		if len(t.Scope) == 0 {
 			errs = append(errs, fmt.Errorf("task %q has no scope", t.ID))
 		}

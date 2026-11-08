@@ -194,6 +194,8 @@ type State struct {
 	// and session belong to the old node.
 	GraphVersion int
 	Replans      int
+	// ReplanReason is why the last replan happened.
+	ReplanReason string
 	Retired      map[string]bool
 }
 
@@ -236,6 +238,7 @@ func (s *State) Apply(e Event) error {
 		s.GraphVersion = cmp.Or(d.Version, s.GraphVersion+1) // logs from before versions have none
 		if len(d.Replaced) > 0 {
 			s.Replans++
+			s.ReplanReason = d.Reason
 		}
 		for _, id := range d.Replaced {
 			s.Retired[id] = true

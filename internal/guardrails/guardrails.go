@@ -37,6 +37,9 @@ type Budget struct {
 	NodeUSD     float64 `yaml:"node_usd" json:"node_usd"`
 	RunUSD      float64 `yaml:"run_usd" json:"run_usd"`
 	NodeMinutes int     `yaml:"node_minutes" json:"node_minutes"`
+	// Replans is how many times a run may replace a failed task, and the tasks
+	// after it, with a new plan. Zero means a failed task fails the run.
+	Replans int `yaml:"replans" json:"replans"`
 }
 
 // Models names the model for each role.
@@ -78,8 +81,8 @@ func (g Guardrails) Validate() error {
 		errs = append(errs, fmt.Errorf("go.version %q must look like 1.27", g.Go.Version))
 	}
 	// claude reads --max-budget-usd to the cent, and may take 0.00 as no cap.
-	if b := g.Budget; b.NodeUSD < 0.01 || b.RunUSD < b.NodeUSD || b.NodeMinutes <= 0 {
-		errs = append(errs, errors.New("budget: node_usd must be at least 0.01, node_minutes positive, and run_usd at least node_usd"))
+	if b := g.Budget; b.NodeUSD < 0.01 || b.RunUSD < b.NodeUSD || b.NodeMinutes <= 0 || b.Replans < 0 {
+		errs = append(errs, errors.New("budget: node_usd must be at least 0.01, node_minutes positive, replans not negative, and run_usd at least node_usd"))
 	}
 	m := g.Models
 	roles := []struct {

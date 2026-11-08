@@ -221,7 +221,7 @@ func (c Claude) agent(ctx context.Context, repo workspace.Repo, t Task, log func
 	}
 
 	if p.readOnly {
-		nodes, err := p.report(c, repo, res.Text, log)
+		nodes, err := p.report(c, repo, t, res.Text, log)
 		spent.Nodes = nodes
 		return spent, err
 	}

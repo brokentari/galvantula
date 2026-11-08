@@ -565,3 +565,137 @@ func TestAutoApprovedGateResumesAfterCrash(t *testing.T) {
 		t.Fatalf("run %s: %s", st.Status, st.Reason)
 	}
 }
+
+const replanGraph = `
+name: g
+nodes:
+  - {id: p, kind: plan}
+  - {id: s, kind: slot, filled_by: p, deps: [p]}
+  - {id: v, kind: tool, deps: [s]}
+`
+
+// replanScript has a plan that emits task a, and b after it. Task a always fails.
+// The first replan answers with the nodes in again.
+func replanScript(again string) string {
+	return `
+nodes:
+  p:
+    emit:
+      - {id: a, kind: agent, role: implementer, scope: [pa], retries: 1}
+      - {id: b, kind: agent, role: implementer, scope: [pb], deps: [a]}
+      - {id: c, kind: agent, role: implementer, scope: [pc]}
+  a: {fail_attempts: 99, error: wrong scope}
+  replan-1:
+    emit: ` + again + `
+`
+}
+
+func startReplan(t *testing.T, replans int, script string) (*event.Store, string) {
+	t.Helper()
+	store := openStore(t)
+	r := New(t.Context(), store, 3)
+	r.Executor = fast
+	rails := guardrails.Guardrails{Budget: guardrails.Budget{Replans: replans}}
+	id, err := r.Start(Run{Graph: mustParse(t, replanGraph), Executor: "fake", FakeScript: script, Rails: rails})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return store, id
+}
+
+// A task that fails its last retry is replaced, with its dependents, and the run goes on.
+func TestReplanReplacesFailedTask(t *testing.T) {
+	store, id := startReplan(t, 1, replanScript(`
+      - {id: a2, kind: agent, role: implementer, scope: [pa]}
+      - {id: b2, kind: agent, role: implementer, scope: [pb], deps: [a2]}`))
+	st, evs := waitUntil(t, store, id, "the run finishes", runDone)
+	if st.Status != event.RunSucceeded {
+		t.Fatalf("run %s: %s", st.Status, st.Reason)
+	}
+	if st.Replans != 1 || st.GraphVersion != 4 || !st.Retired["a"] || !st.Retired["b"] {
+		t.Errorf("replans %d, version %d, retired %v", st.Replans, st.GraphVersion, st.Retired)
+	}
+	for _, n := range []string{"a2", "b2", "c", "replan-1"} {
+		if st.Nodes[n].Status != event.Succeeded {
+			t.Errorf("node %s is %s", n, st.Nodes[n].Status)
+		}
+	}
+	i := slices.IndexFunc(evs, func(e event.Event) bool {
+		d, _ := e.Decode[event.GraphUpdatedData]()
+		return e.Type == event.GraphUpdated && len(d.Replaced) > 0
+	})
+	d, _ := evs[i].Decode[event.GraphUpdatedData]()
+	if !slices.Equal(d.Replaced, []string{"a", "b"}) || !strings.Contains(d.Reason, "wrong scope") {
+		t.Errorf("replan event: replaced %v, reason %q", d.Replaced, d.Reason)
+	}
+}
+
+// Past the limit, a failed task fails the run.
+func TestReplansAreBounded(t *testing.T) {
+	store, id := startReplan(t, 1, replanScript(`
+      - {id: a, kind: agent, role: implementer, scope: [pa]}`)+`
+  a2: {fail_attempts: 99}
+`)
+	st, _ := waitUntil(t, store, id, "the run finishes", runDone)
+	if st.Status != event.RunFailed {
+		t.Fatalf("run %s, want failed", st.Status)
+	}
+}
+
+// A new task may not reuse the id of a task that a replan replaced.
+func TestReplanRejectsRetiredIDs(t *testing.T) {
+	store, id := startReplan(t, 1, replanScript(`
+      - {id: a, kind: agent, role: implementer, scope: [pa]}`))
+	st, evs := waitUntil(t, store, id, "the run finishes", runDone)
+	if st.Status != event.RunFailed || st.Nodes["replan-1"].Status != event.Failed {
+		t.Fatalf("run %s, replan-1 %s: %s", st.Status, st.Nodes["replan-1"].Status, st.Reason)
+	}
+	if !slices.ContainsFunc(evs, func(e event.Event) bool {
+		return e.Type == event.NodeFailed && strings.Contains(string(e.Data), "replaced")
+	}) {
+		t.Error("no failure names the retired id")
+	}
+}
+
+// A replan is not an answer to a failure that is not the task's: a usage limit
+// stops the run.
+func TestReplanIgnoresLimitFailures(t *testing.T) {
+	store := openStore(t)
+	g := mustParse(t, "name: g\nnodes:\n  - {id: a, kind: agent, role: implementer, scope: [pa]}")
+	r := New(t.Context(), store, 3)
+	r.Executor = func(*event.State) (executor.Executor, error) { return limited{}, nil }
+	rails := guardrails.Guardrails{Budget: guardrails.Budget{Replans: 2}}
+	id, err := r.Start(Run{Graph: g, Executor: "fake", Rails: rails})
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, _ := waitUntil(t, store, id, "the run finishes", runDone)
+	if st.Status != event.RunFailed || st.Replans != 0 {
+		t.Errorf("run %s with %d replans", st.Status, st.Replans)
+	}
+}
+
+// A crash after a task's last failure and before the replan must not lose the replan.
+func TestReplanAfterRestart(t *testing.T) {
+	store := openStore(t)
+	g := mustParse(t, "name: g\nnodes:\n  - {id: a, kind: agent, role: implementer, scope: [pa]}\n  - {id: v, kind: tool, deps: [a]}")
+	script := "nodes:\n  replan-1:\n    emit:\n      - {id: a2, kind: agent, role: implementer, scope: [pa]}\n"
+	for _, e := range []event.Event{
+		event.New("r", event.RunCreated, "", 0, event.RunCreatedData{Graph: g, Executor: "fake", FakeScript: script, Guardrails: guardrails.Guardrails{Budget: guardrails.Budget{Replans: 1}}}),
+		event.New("r", event.NodeStarted, "a", 1, nil),
+		event.New("r", event.NodeFailed, "a", 1, event.NodeFailedData{Error: "boom", Class: event.Task}),
+	} {
+		if _, err := store.Append(e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r := New(t.Context(), store, 3)
+	r.Executor = fast
+	if err := r.ResumeAll(); err != nil {
+		t.Fatal(err)
+	}
+	st, _ := waitUntil(t, store, "r", "the resumed run finishes", runDone)
+	if st.Status != event.RunSucceeded || st.Replans != 1 {
+		t.Fatalf("run %s with %d replans: %s", st.Status, st.Replans, st.Reason)
+	}
+}

@@ -25,6 +25,19 @@ type Task struct {
 	Resume bool
 	// Feedback is why the last attempt failed, if there was one.
 	Feedback string
+	// Replan is set on a plan node that answers a failed task.
+	Replan *Replan
+}
+
+// Replan tells the planner what went wrong and what it may not change.
+type Replan struct {
+	// Reason is why the task failed.
+	Reason string
+	// Kept lists the scopes of the tasks that stay. The planner plans the
+	// other packages again.
+	Kept []string
+	// Retired lists the ids of replaced tasks. A new task may not use one.
+	Retired []string
 }
 
 // Result is what an attempt produced. CostUSD is set even when it failed.

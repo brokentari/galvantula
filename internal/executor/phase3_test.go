@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -173,5 +174,22 @@ func TestScopeViolations(t *testing.T) {
 				t.Error("refused work was merged")
 			}
 		})
+	}
+}
+
+func TestReplanBriefNamesTheFailureAndTheFreePackages(t *testing.T) {
+	r := &Replan{Reason: "the check failed: import cycle", Kept: []string{"internal/parse"}, Retired: []string{"render", "cli"}}
+	pkgs := replanPackages([]string{"cmd/x", "internal/parse", "internal/render"}, r)
+	if want := []string{"cmd/x", "internal/render"}; !slices.Equal(pkgs, want) {
+		t.Fatalf("packages to plan again: %v, want %v", pkgs, want)
+	}
+	if got := replanPackages([]string{"a", "b"}, nil); len(got) != 2 {
+		t.Errorf("without a replan every package is planned: %v", got)
+	}
+	brief := fmt.Sprintf(replanBrief, r.Reason, strings.Join(r.Retired, ", "))
+	for _, want := range []string{"import cycle", "render, cli"} {
+		if !strings.Contains(brief, want) {
+			t.Errorf("the brief lacks %q", want)
+		}
 	}
 }

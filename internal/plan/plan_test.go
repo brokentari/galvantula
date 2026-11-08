@@ -56,6 +56,7 @@ func TestValidate(t *testing.T) {
 		{"not a package", Output{Tasks: []Task{task("a", nil, "cmd/x", "internal/parse", "internal/render", "internal/new")}}, "not a package of the contract"},
 		{"an escaping scope", Output{Tasks: []Task{task("a", nil, "../etc")}}, "clean relative path"},
 		{"the factory folder", Output{Tasks: []Task{task("a", nil, ".factory/notes")}}, "clean relative path"},
+		{"a runtime id", Output{Tasks: []Task{task("replan-1", nil, "cmd/x", "internal/parse", "internal/render")}}, "for the runtime"},
 		{"no scope", Output{Tasks: []Task{task("a", nil)}}, "no scope"},
 		{"too deep", Output{Tasks: []Task{
 			task("a", nil, "cmd/x"), task("b", []string{"a"}, "internal/parse"), task("c", []string{"b"}, "internal/render"),

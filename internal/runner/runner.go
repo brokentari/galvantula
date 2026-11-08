@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -18,6 +19,7 @@ import (
 	"github.com/brokentari/galvantula/internal/executor"
 	"github.com/brokentari/galvantula/internal/graph"
 	"github.com/brokentari/galvantula/internal/guardrails"
+	"github.com/brokentari/galvantula/internal/plan"
 )
 
 const (
@@ -264,6 +266,12 @@ func (r *Runner) drive(id string, a *active) error {
 	results := make(chan outcome, r.workers)
 	running := 0
 	for st.Status == event.RunRunning {
+		if replanned, err := replan(st, emit); err != nil {
+			return emit(event.New(id, event.RunFinished, "", 0,
+				event.RunFinishedData{Status: event.RunFailed, Reason: err.Error()}))
+		} else if replanned {
+			continue
+		}
 		stop := stopReason(st)
 		decided := false // a gate was decided here, so more nodes may be ready
 		if stop == "" {
@@ -298,6 +306,9 @@ func (r *Runner) drive(id string, a *active) error {
 					// An infra failure says nothing about the code, so it changes neither.
 					task.Feedback = ns.LastTaskError
 					task.Resume = ns.TaskFailures == 1
+				}
+				if strings.HasPrefix(n.ID, replanPrefix) {
+					task.Replan = replanBrief(st)
 				}
 				// The first infra retry starts at once: a restart is not a rate limit.
 				var wait time.Duration
@@ -360,10 +371,10 @@ func (r *Runner) drive(id string, a *active) error {
 
 func (r *Runner) complete(st *event.State, emit func(event.Event) error, o outcome) error {
 	if o.err == nil && o.node.Kind == graph.Plan {
-		g, err := fillSlot(st.Graph, o.node.ID, o.res.Nodes)
+		g, err := fillSlot(st, o.node.ID, o.res.Nodes)
 		if err == nil {
 			// This one event also marks the plan node succeeded.
-			d := event.GraphUpdatedData{Graph: g, Reason: fmt.Sprintf("%s emitted %d nodes", o.node.ID, len(o.res.Nodes)), CostUSD: o.res.CostUSD}
+			d := event.GraphUpdatedData{Graph: g, Version: st.GraphVersion + 1, Reason: fmt.Sprintf("%s emitted %d nodes", o.node.ID, len(o.res.Nodes)), CostUSD: o.res.CostUSD}
 			return emit(event.New(st.Run, event.GraphUpdated, o.node.ID, o.attempt, d))
 		}
 		o.err = fmt.Errorf("plan output rejected: %w", err)
@@ -400,7 +411,13 @@ func decide(st *event.State, emit func(event.Event) error, d decision) error {
 	return emit(event.New(st.Run, event.GateDecided, d.node, 0, data))
 }
 
-func fillSlot(g graph.Graph, planID string, nodes []graph.Node) (graph.Graph, error) {
+func fillSlot(st *event.State, planID string, nodes []graph.Node) (graph.Graph, error) {
+	for _, n := range nodes {
+		if st.Retired[n.ID] {
+			return graph.Graph{}, fmt.Errorf("node %q: this id belongs to a task that a replan replaced, so a new task needs a new id", n.ID)
+		}
+	}
+	g := st.Graph
 	i := slices.IndexFunc(g.Nodes, func(n graph.Node) bool { return n.Kind == graph.Slot && n.FilledBy == planID })
 	if i < 0 {
 		return graph.Graph{}, errors.New("no slot is filled by this plan node")
@@ -424,7 +441,9 @@ func ready(st *event.State) []graph.Node {
 
 // stopReason says why the run must start no more nodes, or "" if it may.
 func stopReason(st *event.State) string {
-	if i := slices.IndexFunc(st.Graph.Nodes, func(n graph.Node) bool { return st.Nodes[n.ID].Status == event.Failed }); i >= 0 {
+	if i := slices.IndexFunc(st.Graph.Nodes, func(n graph.Node) bool {
+		return st.Nodes[n.ID].Status == event.Failed && !awaitsReplan(st, n)
+	}); i >= 0 {
 		id := st.Graph.Nodes[i].ID
 		return fmt.Sprintf("node %s failed: %s", id, st.Nodes[id].LastError)
 	}
@@ -457,4 +476,61 @@ func finished(st *event.State, stop string) (event.RunStatus, string, bool) {
 		return event.RunFailed, stop, true
 	}
 	return event.RunFailed, "nodes can never start: " + strings.Join(stuck, ", "), true
+}
+
+// replanPrefix starts the id of each plan node that answers a failed task.
+const replanPrefix = "replan-"
+
+// awaitsReplan reports whether a failed node is a task that a replan may
+// replace. Only the task's own failures count: a crash or a usage limit
+// says nothing about the plan.
+func awaitsReplan(st *event.State, n graph.Node) bool {
+	ns := st.Nodes[n.ID]
+	return n.IsTask() && ns.Status == event.Failed && ns.LastClass == event.Task && st.Replans < st.Rails.Budget.Replans
+}
+
+// replan answers a failed task by swapping it, and the tasks that depend on
+// it, for a plan node and a slot. It does nothing while an earlier replan is
+// still open, because the new planner would plan the same packages, or when
+// the run has spent its budget. It reports whether it changed the graph.
+func replan(st *event.State, emit func(event.Event) error) (bool, error) {
+	if budget := st.Rails.Budget.RunUSD; budget > 0 && st.CostUSD >= budget {
+		return false, nil
+	}
+	if slices.ContainsFunc(st.Graph.Nodes, func(n graph.Node) bool { return n.Kind == graph.Slot && strings.HasPrefix(n.FilledBy, replanPrefix) }) {
+		return false, nil
+	}
+	i := slices.IndexFunc(st.Graph.Nodes, func(n graph.Node) bool { return awaitsReplan(st, n) })
+	if i < 0 {
+		return false, nil
+	}
+	failed := st.Graph.Nodes[i]
+	id := fmt.Sprintf("%s%d", replanPrefix, st.Replans+1)
+	planner := graph.Node{ID: id, Title: "Plan again after " + failed.ID + " failed", Kind: graph.Plan, Role: "planner", Retries: plan.Retries}
+	g, removed, err := st.Graph.Replan(failed.ID, planner, id+"-tasks")
+	if err != nil {
+		return false, fmt.Errorf("replan after %s failed: %w", failed.ID, err)
+	}
+	var ids []string
+	for _, n := range removed {
+		ids = append(ids, n.ID)
+	}
+	d := event.GraphUpdatedData{
+		Graph:    g,
+		Version:  st.GraphVersion + 1,
+		Replaced: ids,
+		Reason:   fmt.Sprintf("task %s failed: %s", failed.ID, st.Nodes[failed.ID].LastError),
+	}
+	return true, emit(event.New(st.Run, event.GraphUpdated, "", 0, d))
+}
+
+// replanBrief gathers what the planner needs to plan the replaced tasks again.
+func replanBrief(st *event.State) *executor.Replan {
+	b := &executor.Replan{Reason: st.ReplanReason, Retired: slices.Sorted(maps.Keys(st.Retired))}
+	for _, n := range st.Graph.Nodes {
+		if n.IsTask() {
+			b.Kept = append(b.Kept, n.Scope...)
+		}
+	}
+	return b
 }

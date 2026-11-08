@@ -42,7 +42,7 @@ type rolePlan struct {
 	system func(goVersion string) (string, error)
 	// report handles the final text of a read-only agent. It may return the
 	// nodes of a task graph, for the planner.
-	report func(c Claude, repo workspace.Repo, text string, log func(string)) ([]graph.Node, error)
+	report func(c Claude, repo workspace.Repo, t Task, text string, log func(string)) ([]graph.Node, error)
 	// skip returns a reason to skip the node without running an agent.
 	skip func(repo workspace.Repo) string
 	// after runs when the work is merged. It reports to the run's log.
@@ -317,7 +317,7 @@ const (
 )
 
 // reviewReport saves the review on main and logs its verdict.
-func reviewReport(_ Claude, repo workspace.Repo, text string, log func(string)) ([]graph.Node, error) {
+func reviewReport(_ Claude, repo workspace.Repo, _ Task, text string, log func(string)) ([]graph.Node, error) {
 	if err := saveReview(repo, text); err != nil {
 		return nil, err
 	}

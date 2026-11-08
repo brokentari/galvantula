@@ -72,7 +72,7 @@ Split the work into tasks, one per builder. Rules:
 - The scope lists package directories, such as "internal/store". Every package below must be in the scope of exactly one task. Do not add a package that is not in the list.
 - deps lists the ids of tasks that must finish first. A builder starts only after its deps are merged. Give a task a dep only if its tests need the other package to work for real, or if it must call code that the other task writes. Packages with no such need get no dep, so that builders run at the same time. A task may depend on tasks only, never on itself.
 - At most %d tasks. At most %d tasks in the longest chain of deps. Keep the plan small: one task for a package that is small, and do not split a package.
-- Do not use the ids standards, architect, plan, tasks, review, fix or verify, or an id that starts with approve-. Other nodes have them.
+- Do not use the ids standards, architect, plan, tasks, review, fix or verify, or an id that starts with approve- or replan-. Other nodes have them.
 
 Answer with a JSON object and nothing else, in this shape:
 
@@ -83,12 +83,37 @@ The packages of the contract:
 %s
 `
 
+const replanBrief = `A task of the plan failed, and the factory replaced it and the tasks that depended on it. Plan those tasks again. The tasks that stay are already running or merged.
+
+Why the task failed:
+
+%s
+
+The packages below are the ones to plan again. On main they are still stubs. Use the same rules as before, with these changes:
+- Give each package below to exactly one task, and no other package. The kept tasks own the others.
+- Do not repeat the failure. Change the scope, the split or the deps so that the failure cannot happen again.
+- A task may depend on the ids of the other new tasks only. The kept tasks are merged or running already.
+- Do not use any of these ids, because they belong to replaced tasks: %s.
+- Do not use the ids standards, architect, plan, tasks, review, fix or verify, or an id that starts with approve- or replan-.
+
+`
+
+// replanPackages lists the packages that a replan must plan again: the
+// packages of the contract that no kept task owns.
+func replanPackages(pkgs []string, r *Replan) []string {
+	if r == nil {
+		return pkgs
+	}
+	return slices.DeleteFunc(slices.Clone(pkgs), func(p string) bool { return slices.Contains(r.Kept, p) })
+}
+
 // plannerPrompt lists the contract's packages for the planner.
-func plannerPrompt(repo workspace.Repo, _ Task) (string, error) {
+func plannerPrompt(repo workspace.Repo, t Task) (string, error) {
 	pkgs, err := packagesOf(repo)
 	if err != nil {
 		return "", err
 	}
+	pkgs = replanPackages(pkgs, t.Replan)
 	if len(pkgs) == 0 {
 		return "", fmt.Errorf("the contract has no Go package to plan for")
 	}
@@ -96,13 +121,17 @@ func plannerPrompt(repo workspace.Repo, _ Task) (string, error) {
 	for _, p := range pkgs {
 		list = append(list, "- "+p)
 	}
-	return fmt.Sprintf(plannerBrief, plan.MaxTasks, plan.MaxDepth, plan.Schema, strings.Join(list, "\n")), nil
+	brief := fmt.Sprintf(plannerBrief, plan.MaxTasks, plan.MaxDepth, plan.Schema, strings.Join(list, "\n"))
+	if t.Replan != nil {
+		brief = fmt.Sprintf(replanBrief, t.Replan.Reason, strings.Join(t.Replan.Retired, ", ")) + brief
+	}
+	return brief, nil
 }
 
 // planReport parses and validates the planner's answer and returns the nodes
 // that fill the task-graph slot. It logs the tasks, for the person who
 // approves them at the gate, with a ceiling on what one attempt of each costs.
-func planReport(c Claude, repo workspace.Repo, text string, log func(string)) ([]graph.Node, error) {
+func planReport(c Claude, repo workspace.Repo, t Task, text string, log func(string)) ([]graph.Node, error) {
 	out, err := plan.Parse(text)
 	if err != nil {
 		return nil, fmt.Errorf("plan rejected: %w", err)
@@ -111,7 +140,7 @@ func planReport(c Claude, repo workspace.Repo, text string, log func(string)) ([
 	if err != nil {
 		return nil, &InfraError{Err: err}
 	}
-	if err := plan.Validate(out, pkgs); err != nil {
+	if err := plan.Validate(out, replanPackages(pkgs, t.Replan)); err != nil {
 		return nil, fmt.Errorf("plan rejected:\n%w", err)
 	}
 	for _, t := range out.Tasks {
