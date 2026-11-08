@@ -39,7 +39,7 @@ matters, close it in the spec.
 
 ## Plant a planner mistake
 
-`factory eval -planted <name>` tests replanning. It replaces the planner's
+`factory eval -graph graphs/phase4.yaml -planted <name>` tests replanning. It replaces the planner's
 first answer with `<eval>/planted/<name>.json`, which has the same shape as the
 planner's answer. The file must pass the plan rules, so the plan is wrong in a
 way the rules cannot see: a task that needs a package that its deps do not

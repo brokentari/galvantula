@@ -117,6 +117,10 @@ func runEvals(args []string) error {
 	if err != nil {
 		return err
 	}
+	if *planted != "" && !slices.ContainsFunc(parsed.Nodes, func(n graph.Node) bool { return n.Kind == graph.Plan }) {
+		// Only a plan node reads the planted plan. Without one the run would record it and never use it.
+		return fmt.Errorf("-planted needs a graph with a plan node, and %s has none; use graphs/phase4.yaml", *graphPath)
+	}
 	root, err := filepath.Abs(*runsDir)
 	if err != nil {
 		return err

@@ -316,7 +316,12 @@ func TestPlantedPlanReachesTheServer(t *testing.T) {
 	inTempRepo(t, repo)
 	args := func(name string) []string {
 		return []string{"-server", srv.URL, "-db", "f.db", "-runs", "runs", "-n", "1", "-planted", name,
-			"-graph", filepath.Join(repo, "graphs", "phase1.yaml"), filepath.Join(repo, "evals", "logq")}
+			"-graph", filepath.Join(repo, "graphs", "phase4.yaml"), filepath.Join(repo, "evals", "logq")}
+	}
+	// phase1 has no plan node, so a planted plan would never be used.
+	noPlanner := append(args("cli-first")[:10:10], "-graph", filepath.Join(repo, "graphs", "phase1.yaml"), filepath.Join(repo, "evals", "logq"))
+	if err := runEvals(noPlanner); err == nil || !strings.Contains(err.Error(), "plan node") || bodies.Load() != nil {
+		t.Fatalf("a graph with no plan node: error %v", err)
 	}
 	if err := runEvals(args("nope")); err == nil || bodies.Load() != nil {
 		t.Fatalf("a missing planted plan: error %v, run started %t", err, bodies.Load() != nil)

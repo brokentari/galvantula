@@ -165,11 +165,11 @@ nodes:
 	for id, want := range map[string][]string{
 		"c":              {"base"},
 		"review":         {"replan-1-tasks", "c"},
-		"replan-1":       {"base"},
+		"replan-1":       nil,
 		"replan-1-tasks": {"replan-1"},
 	} {
 		n, ok := out.Node(id)
-		if !ok || !slices.Equal(n.Deps, want) {
+		if !ok || !slices.Equal(n.Deps, want) { // slices.Equal treats nil and empty alike
 			t.Errorf("%s deps = %v (found %t), want %v", id, n.Deps, ok, want)
 		}
 	}

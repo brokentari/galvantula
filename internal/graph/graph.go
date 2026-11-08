@@ -284,9 +284,9 @@ func (n Node) IsTask() bool {
 }
 
 // Replan takes out a failed task and every task that depends on it, and puts
-// a plan node and a slot in their place. The planner node starts after the
-// nodes that the removed tasks depended on, which are the tasks that stay.
-// Nodes that depended on a removed task now depend on the slot. Replan returns
+// a plan node and a slot in their place. The planner node has the deps the
+// caller gave it. It must not wait for a task that stays: that task may fail
+// while the planner waits, and then the planner could never start. Nodes that depended on a removed task now depend on the slot. Replan returns
 // the new graph and the removed nodes.
 func (g Graph) Replan(failed string, planner Node, slotID string) (Graph, []Node, error) {
 	if n, ok := g.Node(failed); !ok || !n.IsTask() {
@@ -311,11 +311,6 @@ func (g Graph) Replan(failed string, planner Node, slotID string) (Graph, []Node
 	for _, n := range g.Nodes {
 		if gone[n.ID] {
 			removed = append(removed, n)
-			for _, d := range n.Deps {
-				if !gone[d] && !slices.Contains(planner.Deps, d) {
-					planner.Deps = append(planner.Deps, d)
-				}
-			}
 			continue
 		}
 		out.Nodes = append(out.Nodes, n)

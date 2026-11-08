@@ -675,6 +675,40 @@ func TestReplanIgnoresLimitFailures(t *testing.T) {
 	}
 }
 
+// A task that stays may fail while a replan waits to start. The planner must
+// not wait for it, and the failure gets its own replan.
+func TestReplanWhileAKeptTaskFails(t *testing.T) {
+	store := openStore(t)
+	r := New(t.Context(), store, 3)
+	r.Executor = fast
+	script := `
+nodes:
+  p:
+    emit:
+      - {id: r, kind: agent, role: implementer, scope: [pr]}
+      - {id: k, kind: agent, role: implementer, scope: [pk]}
+      - {id: d, kind: agent, role: implementer, scope: [pd], deps: [r, k]}
+  r: {fail_attempts: 99}
+  k: {fail_attempts: 99}
+  replan-1:
+    emit:
+      - {id: r2, kind: agent, role: implementer, scope: [pr]}
+      - {id: d2, kind: agent, role: implementer, scope: [pd], deps: [r2]}
+  replan-2:
+    emit:
+      - {id: k2, kind: agent, role: implementer, scope: [pk]}
+`
+	rails := guardrails.Guardrails{Budget: guardrails.Budget{Replans: 2}}
+	id, err := r.Start(Run{Graph: mustParse(t, replanGraph), Executor: "fake", FakeScript: script, Rails: rails})
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, _ := waitUntil(t, store, id, "the run finishes", runDone)
+	if st.Status != event.RunSucceeded || st.Replans != 2 {
+		t.Fatalf("run %s with %d replans: %s", st.Status, st.Replans, st.Reason)
+	}
+}
+
 // A crash after a task's last failure and before the replan must not lose the replan.
 func TestReplanAfterRestart(t *testing.T) {
 	store := openStore(t)
