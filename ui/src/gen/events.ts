@@ -44,6 +44,8 @@ export interface GraphNode {
 export interface GraphUpdatedData {
   graph: Graph;
   reason: string;
+  version?: number;
+  replaced?: string[];
   cost_usd?: number;
 }
 

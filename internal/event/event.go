@@ -70,9 +70,16 @@ type RunCreatedData struct {
 
 // GraphUpdatedData is also how a plan node succeeds; CostUSD is that attempt's cost.
 type GraphUpdatedData struct {
-	Graph   graph.Graph `json:"graph"`
-	Reason  string      `json:"reason"`
-	CostUSD float64     `json:"cost_usd,omitzero"`
+	Graph  graph.Graph `json:"graph"`
+	Reason string      `json:"reason"`
+	// Version numbers the graphs of a run. The graph in run_created is
+	// version 1, and each graph_updated event is the next one.
+	Version int `json:"version,omitzero"`
+	// Replaced lists the tasks this update took out because a task failed.
+	// An update with no Replaced is a plan filling a slot. Each one that has
+	// Replaced counts against the run's replans.
+	Replaced []string `json:"replaced,omitempty"`
+	CostUSD  float64  `json:"cost_usd,omitzero"`
 }
 
 type NodeSucceededData struct {
@@ -181,6 +188,13 @@ type State struct {
 	Status      RunStatus
 	Reason      string
 	Nodes       map[string]*NodeState
+	// GraphVersion is the version of Graph. Replans counts the updates that
+	// replaced tasks. Retired holds the id of every node that an update
+	// replaced: a later node may not reuse one, because its worktree, branch
+	// and session belong to the old node.
+	GraphVersion int
+	Replans      int
+	Retired      map[string]bool
 }
 
 func (s *State) spend(n *NodeState, usd float64) {
@@ -208,7 +222,7 @@ func (s *State) Apply(e Event) error {
 			return err
 		}
 		*s = State{Run: e.Run, Graph: d.Graph, Executor: d.Executor, FakeScript: d.FakeScript,
-			Spec: d.Spec, Rails: d.Guardrails, Commit: d.Commit, AutoApprove: d.AutoApprove, Status: RunRunning, Nodes: map[string]*NodeState{}}
+			Spec: d.Spec, Rails: d.Guardrails, Commit: d.Commit, AutoApprove: d.AutoApprove, Status: RunRunning, Nodes: map[string]*NodeState{}, GraphVersion: 1, Retired: map[string]bool{}}
 		for _, n := range d.Graph.Nodes {
 			s.Nodes[n.ID] = &NodeState{Status: Pending}
 		}
@@ -219,6 +233,14 @@ func (s *State) Apply(e Event) error {
 			return err
 		}
 		s.Graph = d.Graph
+		s.GraphVersion = cmp.Or(d.Version, s.GraphVersion+1) // logs from before versions have none
+		if len(d.Replaced) > 0 {
+			s.Replans++
+		}
+		for _, id := range d.Replaced {
+			s.Retired[id] = true
+			delete(s.Nodes, id)
+		}
 		nodes := make(map[string]*NodeState, len(d.Graph.Nodes))
 		for _, n := range d.Graph.Nodes {
 			nodes[n.ID] = cmp.Or(s.Nodes[n.ID], &NodeState{Status: Pending})

@@ -275,3 +275,63 @@ func (g Graph) Fill(slotID string, emitted []Node) (Graph, error) {
 	}
 	return out, out.Validate()
 }
+
+// IsTask reports whether a node is a task that a plan emitted: an implementer
+// agent with a scope.
+func (n Node) IsTask() bool {
+	return n.Kind == Agent && n.Role == "implementer" && len(n.Scope) > 0
+}
+
+// Replan takes out a failed task and every task that depends on it, and puts
+// a plan node and a slot in their place. The planner node starts after the
+// nodes that the removed tasks depended on, which are the tasks that stay.
+// Nodes that depended on a removed task now depend on the slot. Replan returns
+// the new graph and the removed nodes.
+func (g Graph) Replan(failed string, planner Node, slotID string) (Graph, []Node, error) {
+	if n, ok := g.Node(failed); !ok || !n.IsTask() {
+		return Graph{}, nil, fmt.Errorf("node %q is not a task that a plan emitted", failed)
+	}
+	if planner.Kind != Plan {
+		return Graph{}, nil, fmt.Errorf("node %q: replan needs a plan node, not %s", planner.ID, planner.Kind)
+	}
+	// Nodes are not in dependency order, so repeat until no new dependent turns up.
+	gone := map[string]bool{failed: true}
+	for grew := true; grew; {
+		grew = false
+		for _, n := range g.Nodes {
+			if !gone[n.ID] && n.IsTask() && slices.ContainsFunc(n.Deps, func(d string) bool { return gone[d] }) {
+				gone[n.ID], grew = true, true
+			}
+		}
+	}
+
+	out := Graph{Name: g.Name}
+	var removed []Node
+	for _, n := range g.Nodes {
+		if gone[n.ID] {
+			removed = append(removed, n)
+			for _, d := range n.Deps {
+				if !gone[d] && !slices.Contains(planner.Deps, d) {
+					planner.Deps = append(planner.Deps, d)
+				}
+			}
+			continue
+		}
+		out.Nodes = append(out.Nodes, n)
+	}
+	for i, n := range out.Nodes {
+		var deps []string
+		for _, d := range n.Deps {
+			if gone[d] {
+				d = slotID
+			}
+			if !slices.Contains(deps, d) {
+				deps = append(deps, d)
+			}
+		}
+		out.Nodes[i].Deps = deps
+	}
+	slot := Node{ID: slotID, Title: "Replanned tasks", Kind: Slot, FilledBy: planner.ID, Deps: []string{planner.ID}}
+	out.Nodes = append(out.Nodes, planner, slot)
+	return out, removed, out.Validate()
+}

@@ -137,3 +137,53 @@ func TestRolesAndAdvisory(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestReplan(t *testing.T) {
+	g, err := Parse([]byte(`
+name: g
+nodes:
+  - {id: base, kind: agent, role: implementer, scope: [base]}
+  - {id: a, kind: agent, role: implementer, scope: [a], deps: [base]}
+  - {id: b, kind: agent, role: implementer, scope: [b], deps: [a]}
+  - {id: c, kind: agent, role: implementer, scope: [c], deps: [base]}
+  - {id: review, kind: agent, role: reviewer, deps: [b, c]}
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, removed, err := g.Replan("a", Node{ID: "replan-1", Kind: Plan, Role: "planner"}, "replan-1-tasks")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ids []string
+	for _, n := range removed {
+		ids = append(ids, n.ID)
+	}
+	if !slices.Equal(ids, []string{"a", "b"}) {
+		t.Errorf("removed %v, want the failed task and its dependent", ids)
+	}
+	for id, want := range map[string][]string{
+		"c":              {"base"},
+		"review":         {"replan-1-tasks", "c"},
+		"replan-1":       {"base"},
+		"replan-1-tasks": {"replan-1"},
+	} {
+		n, ok := out.Node(id)
+		if !ok || !slices.Equal(n.Deps, want) {
+			t.Errorf("%s deps = %v (found %t), want %v", id, n.Deps, ok, want)
+		}
+	}
+	filled, err := out.Fill("replan-1-tasks", []Node{{ID: "a2", Kind: Agent, Role: "implementer", Scope: []string{"a"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := filled.Node("a2"); !slices.Equal(n.Deps, []string{"replan-1"}) {
+		t.Errorf("a2 deps = %v, want the plan node", n.Deps)
+	}
+	if _, _, err := g.Replan("review", Node{ID: "p", Kind: Plan}, "s"); err == nil {
+		t.Error("Replan accepted a node that is not a task")
+	}
+	if _, _, err := g.Replan("a", Node{ID: "p", Kind: Agent}, "s"); err == nil {
+		t.Error("Replan accepted a planner that is not a plan node")
+	}
+}
