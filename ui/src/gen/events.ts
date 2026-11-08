@@ -5,6 +5,7 @@ export interface Budget {
   run_usd: number;
   node_minutes: number;
   replans: number;
+  revisions: number;
 }
 
 export interface DecideRequest {
@@ -19,6 +20,7 @@ export type FailureClass = "task" | "infra" | "limit";
 export interface GateDecidedData {
   approved: boolean;
   notes?: string;
+  revise?: boolean;
 }
 
 export interface GoTarget {

@@ -315,6 +315,7 @@ func (r *Runner) drive(id string, a *active) error {
 					task.Feedback = ns.LastTaskError
 					task.Resume = ns.TaskFailures == 1
 				}
+				task.Revision = ns.Revised
 				if strings.HasPrefix(n.ID, replanPrefix) {
 					task.Replan = replanBrief(st)
 				}
@@ -416,6 +417,8 @@ func decide(st *event.State, emit func(event.Event) error, d decision) error {
 		return fmt.Errorf("node %s is not a waiting gate", d.node)
 	}
 	data := event.GateDecidedData{Approved: d.approved, Notes: d.notes}
+	// Notes are what the node needs to do better, so a rejection without them ends the run.
+	data.Revise = !d.approved && strings.TrimSpace(d.notes) != "" && st.Revisions < st.Rails.Budget.Revisions && revisable(st, d.node)
 	return emit(event.New(st.Run, event.GateDecided, d.node, 0, data))
 }
 
@@ -541,4 +544,14 @@ func replanBrief(st *event.State) *executor.Replan {
 		}
 	}
 	return b
+}
+
+// revisable reports whether a gate waits only for agent nodes, which a
+// rejection can send back.
+func revisable(st *event.State, gate string) bool {
+	n, ok := st.Graph.Node(gate)
+	return ok && len(n.Deps) > 0 && !slices.ContainsFunc(n.Deps, func(id string) bool {
+		d, ok := st.Graph.Node(id)
+		return !ok || d.Kind != graph.Agent
+	})
 }

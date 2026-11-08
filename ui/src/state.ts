@@ -63,6 +63,16 @@ export function apply(run: RunView | undefined, e: FactoryEvent): RunView | unde
     return { ...run, status: e.data.status, reason: e.data.reason };
   }
 
+  if (e.type === "gate_decided" && e.data.revise && e.node) {
+    // The runtime sent the work back: the gate and the nodes it waits for run again.
+    const gate = run.graph.nodes.find((g) => g.id === e.node);
+    const nodes = { ...run.nodes, [e.node]: { ...run.nodes[e.node], status: "pending" as const } };
+    for (const id of gate?.deps ?? []) {
+      if (nodes[id]) nodes[id] = { ...nodes[id], status: "pending", taskFailures: 0, lastError: undefined };
+    }
+    return { ...run, nodes };
+  }
+
   const n = e.node ? run.nodes[e.node] : undefined;
   if (!e.node || !n) return run;
   let next: NodeView;
@@ -163,7 +173,7 @@ export function describe(e: FactoryEvent): string {
     case "gate_waiting":
       return `${e.node} waits for you`;
     case "gate_decided":
-      return `${e.node} ${e.data.approved ? "approved" : "rejected"}${e.data.notes ? `: ${e.data.notes}` : ""}`;
+      return `${e.node} ${e.data.approved ? "approved" : e.data.revise ? "sent back" : "rejected"}${e.data.notes ? `: ${e.data.notes}` : ""}`;
     case "run_finished":
       return `run ${e.data.status}${e.data.reason ? `: ${e.data.reason}` : ""}`;
   }

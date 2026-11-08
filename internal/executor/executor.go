@@ -27,6 +27,10 @@ type Task struct {
 	Feedback string
 	// Replan is set on a plan node that answers a failed task.
 	Replan *Replan
+	// Revision is set when a person rejected the node's last result at a
+	// gate. Feedback holds their notes. The node starts again from the
+	// commit before its work.
+	Revision bool
 }
 
 // Kept is a task that a replan leaves in place.

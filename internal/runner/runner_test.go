@@ -733,3 +733,74 @@ func TestReplanAfterRestart(t *testing.T) {
 		t.Fatalf("run %s with %d replans: %s", st.Status, st.Replans, st.Reason)
 	}
 }
+
+const reviseGraph = `
+name: g
+nodes:
+  - {id: a, kind: agent, role: architect}
+  - {id: g, kind: gate, deps: [a]}
+  - {id: v, kind: tool, deps: [g]}
+`
+
+func startRevise(t *testing.T, revisions int, x *tasks) (*Runner, *event.Store, string) {
+	t.Helper()
+	store := openStore(t)
+	r := New(t.Context(), store, 3)
+	r.Executor = func(*event.State) (executor.Executor, error) { return x, nil }
+	rails := guardrails.Guardrails{Budget: guardrails.Budget{Revisions: revisions}}
+	id, err := r.Start(Run{Graph: mustParse(t, reviseGraph), Executor: "fake", Rails: rails})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitUntil(t, store, id, "the gate waits", nodeIs("g", event.Waiting))
+	return r, store, id
+}
+
+// A rejection with notes sends the work back to the node before the gate.
+func TestRejectionWithNotesSendsWorkBack(t *testing.T) {
+	x := &tasks{}
+	r, store, id := startRevise(t, 1, x)
+	if err := r.Decide(id, "g", false, "split the parser out"); err != nil {
+		t.Fatal(err)
+	}
+	waitUntil(t, store, id, "the gate waits again", func(st *event.State, _ []event.Event) bool {
+		return st.Revisions == 1 && st.Nodes["g"].Status == event.Waiting && st.Nodes["a"].Attempt == 2
+	})
+	if err := r.Decide(id, "g", true, ""); err != nil {
+		t.Fatal(err)
+	}
+	st, _ := waitUntil(t, store, id, "the run finishes", runDone)
+	if st.Status != event.RunSucceeded {
+		t.Fatalf("run %s: %s", st.Status, st.Reason)
+	}
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	var second executor.Task
+	for _, t := range x.seen {
+		if t.Node.ID == "a" && t.Attempt == 2 {
+			second = t
+		}
+	}
+	if !second.Revision || second.Resume || !strings.Contains(second.Feedback, "split the parser out") {
+		t.Errorf("the second attempt got %+v", second)
+	}
+}
+
+// Without notes, or past the limit, a rejection ends the run.
+func TestRejectionEndsTheRun(t *testing.T) {
+	for name, tt := range map[string]struct {
+		revisions int
+		notes     string
+	}{"no notes": {1, " "}, "no revisions left": {0, "try again"}} {
+		t.Run(name, func(t *testing.T) {
+			r, store, id := startRevise(t, tt.revisions, &tasks{})
+			if err := r.Decide(id, "g", false, tt.notes); err != nil {
+				t.Fatal(err)
+			}
+			st, _ := waitUntil(t, store, id, "the run finishes", runDone)
+			if st.Status != event.RunFailed || st.Revisions != 0 {
+				t.Errorf("run %s with %d revisions", st.Status, st.Revisions)
+			}
+		})
+	}
+}

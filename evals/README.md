@@ -50,11 +50,13 @@ Only the server reads the file. No agent sees it.
 | planted plan | the mistake |
 |---|---|
 | `logq/cli-first` | `cmd/logq` has no deps, so it starts before the packages it calls |
-| `logq/filter-before-parse` | `internal/filter` has no dep on `internal/parse`, which it may need |
+| `logq/cli-after-parse` | `cmd/logq` waits for `internal/parse` only, but it also calls `internal/filter` and `internal/render` |
 
-The second plan fails only if the architect's contract makes the filter use
-the parser's types, so that run may pass with no replan. Read `replans` before
-you read the pass rate.
+Both plans make the same kind of mistake: a missing dep on a package that the
+command calls. The rules cannot see it, because a package with no owner is
+the only scope error they refuse. A plan that fails only if the architect
+chose certain types is a poor test: an earlier `filter-before-parse` plan
+never failed in three runs. Read `replans` before you read the pass rate.
 
 ## Run the hidden tests
 

@@ -57,9 +57,10 @@ type evalResult struct {
 	Replans int    `json:"replans,omitzero"`
 }
 
-// parallelism returns the most agent nodes that ran at once, and how many
-// attempts failed on a merge conflict, from a run's events.
-func parallelism(evs []event.Event, g graph.Graph) (maxRunning, conflicts int) {
+// parallelism returns the most agent nodes that ran at once, how many
+// attempts failed on a merge conflict, and how many agent attempts started,
+// from a run's events. It counts attempts of nodes that a replan removed.
+func parallelism(evs []event.Event, g graph.Graph) (maxRunning, conflicts, attempts int) {
 	kind := map[string]graph.Kind{}
 	for _, n := range g.Nodes {
 		kind[n.ID] = n.Kind
@@ -75,6 +76,7 @@ func parallelism(evs []event.Event, g graph.Graph) (maxRunning, conflicts int) {
 			}
 		case event.NodeStarted:
 			if kind[e.Node] == graph.Agent {
+				attempts++
 				running[e.Node] = true
 				maxRunning = max(maxRunning, len(running))
 			}
@@ -85,7 +87,7 @@ func parallelism(evs []event.Event, g graph.Graph) (maxRunning, conflicts int) {
 			}
 		}
 	}
-	return maxRunning, conflicts
+	return maxRunning, conflicts, attempts
 }
 
 // runEvals runs each eval n times through the server, scores each product
@@ -250,13 +252,10 @@ func evalOnce(store *event.Store, addr, root, dir, g, planted string) (evalResul
 		Implementer:   st.Rails.Models.Implementer.Model + " at " + st.Rails.Models.Implementer.Effort,
 		ClaudeVersion: claude.Version(),
 	}
-	r.MaxParallel, r.MergeConflicts = parallelism(evs, graphOf(evs, st))
+	r.MaxParallel, r.MergeConflicts, r.Attempts = parallelism(evs, graphOf(evs, st))
 	r.Replans = st.Replans
 	for _, n := range st.Graph.Nodes {
 		ns := st.Nodes[n.ID]
-		if n.Kind == graph.Agent {
-			r.Attempts += ns.Attempt
-		}
 		r.Limited = r.Limited || ns.LastClass == event.Limit
 	}
 	if st.Status != event.RunSucceeded {

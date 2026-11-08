@@ -1,0 +1,5 @@
+{
+  "name": "factory",
+  "version": "0.1.0",
+  "description": "Run the software factory from Claude Code: start a run, follow it, and decide at the contract and task-graph gates."
+}

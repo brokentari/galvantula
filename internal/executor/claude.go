@@ -129,6 +129,15 @@ func (c Claude) agent(ctx context.Context, repo workspace.Repo, t Task, log func
 		}
 	}
 	run := filepath.Join(c.Root, t.Run)
+	var rejected string // the result a person sent back, shown to the agent because main no longer has it
+	if t.Revision {
+		data, _ := os.ReadFile(filepath.Join(repo.Dir, "CONTRACT.md"))
+		rejected = string(data)
+		if err := repo.Rewind("standards"); err != nil {
+			return Result{}, &InfraError{Err: err}
+		}
+		log("a person sent the result back: main is at the standards commit again")
+	}
 	wt, err := repo.Worktree(t.Node.ID)
 	if err != nil {
 		return Result{}, &InfraError{Err: err}
@@ -200,7 +209,11 @@ func (c Claude) agent(ctx context.Context, repo workspace.Repo, t Task, log func
 		if opts.Prompt, err = p.brief(repo, t); err != nil {
 			return Result{}, &InfraError{Err: err}
 		}
-		if t.Feedback != "" {
+		switch {
+		case t.Revision:
+			opts.Prompt += "\n\n" + t.Feedback + "\n\nThe CONTRACT.md they rejected was:\n\n" + rejected +
+				"\n\nThe rejected files are not on disk. Write a new contract that answers their notes."
+		case t.Feedback != "":
 			opts.Prompt += "\n\nAn earlier attempt failed. The factory reported:\n\n" + t.Feedback
 		}
 	}

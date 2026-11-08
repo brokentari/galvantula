@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/brokentari/galvantula/internal/event"
 	"github.com/brokentari/galvantula/internal/guardrails"
@@ -154,5 +155,77 @@ func TestRejectsUnsafeRequests(t *testing.T) {
 
 	if runs, _ := store.Runs(); len(runs) != 0 {
 		t.Errorf("a refused request started %d runs", len(runs))
+	}
+}
+
+func getJSON(t *testing.T, url string, v any) int {
+	t.Helper()
+	resp, err := http.Get(url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusOK {
+		if err := json.UnmarshalRead(resp.Body, v); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return resp.StatusCode
+}
+
+// The state and logs endpoints give a client the run, with what the waiting gate needs to show.
+func TestStateAndLogs(t *testing.T) {
+	store, err := event.Open(filepath.Join(t.TempDir(), "events.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	r := runner.New(t.Context(), store, 3)
+	srv := httptest.NewServer(New(store, r, guardrails.Guardrails{}, ""))
+	defer srv.Close()
+	body, _ := json.Marshal(StartRequest{
+		Graph:      "name: g\nnodes:\n  - {id: a, title: Write it, kind: tool}\n  - {id: ok, kind: gate, deps: [a]}\n  - {id: b, kind: tool, deps: [ok]}",
+		Executor:   "fake",
+		FakeScript: "default: {duration: 1ms}\nnodes:\n  a: {logs: [first line, second line]}",
+	})
+	resp, err := http.Post(srv.URL+"/api/runs", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var created struct {
+		ID string `json:"id"`
+	}
+	json.UnmarshalRead(resp.Body, &created)
+	resp.Body.Close()
+
+	var snap Snapshot
+	for range 500 {
+		getJSON(t, srv.URL+"/api/runs/"+created.ID+"/state", &snap)
+		if len(snap.Gates) == 1 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if len(snap.Gates) != 1 || snap.Gates[0].Node != "ok" || strings.Join(snap.Gates[0].Context, "|") != "first line|second line" {
+		t.Fatalf("snapshot gates: %+v", snap.Gates)
+	}
+	if snap.Graph != "g" || snap.Status != event.RunRunning || len(snap.Nodes) != 3 || snap.Nodes[0].Title != "Write it" {
+		t.Errorf("snapshot: %+v", snap)
+	}
+
+	var logs map[string][]string
+	getJSON(t, srv.URL+"/api/runs/"+created.ID+"/logs?node=a&tail=1", &logs)
+	if len(logs["lines"]) != 1 || logs["lines"][0] != "second line" {
+		t.Errorf("logs of a, tail 1: %v", logs)
+	}
+	getJSON(t, srv.URL+"/api/runs/"+created.ID+"/logs", &logs)
+	if len(logs["lines"]) != 2 || !strings.HasPrefix(logs["lines"][0], "a: ") {
+		t.Errorf("logs of every node: %v", logs)
+	}
+	if code := getJSON(t, srv.URL+"/api/runs/"+created.ID+"/logs?tail=0", &logs); code != http.StatusBadRequest {
+		t.Errorf("tail=0: %d, want 400", code)
+	}
+	if code := getJSON(t, srv.URL+"/api/runs/nope/state", &snap); code != http.StatusNotFound {
+		t.Errorf("unknown run: %d, want 404", code)
 	}
 }

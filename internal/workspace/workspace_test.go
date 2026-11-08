@@ -134,3 +134,27 @@ func TestMergeConflictIsReportedAndAborted(t *testing.T) {
 		t.Errorf("main is not clean after the aborted merge:\n%s", status)
 	}
 }
+
+func TestRewindRemovesWorkAfterACommit(t *testing.T) {
+	r, err := Open(filepath.Join(t.TempDir(), "repo"))
+	must(t, err)
+	must(t, os.WriteFile(filepath.Join(r.Dir, "AGENTS.md"), []byte("rules"), 0o644))
+	r.CommitAll(r.Dir, "standards")
+	wt, err := r.Worktree("architect")
+	must(t, err)
+	must(t, os.WriteFile(filepath.Join(wt, "CONTRACT.md"), []byte("v1"), 0o644))
+	r.CommitAll(wt, "architect")
+	must(t, r.Merge("architect"))
+
+	must(t, r.Rewind("standards"))
+	if _, err := os.Stat(filepath.Join(r.Dir, "CONTRACT.md")); err == nil {
+		t.Error("the rejected contract is still on main")
+	}
+	if _, err := os.Stat(filepath.Join(r.Dir, "AGENTS.md")); err != nil {
+		t.Errorf("the standards commit lost its file: %v", err)
+	}
+	must(t, r.Reset(wt)) // the node's branch follows main, so its next merge is a fast-forward
+	if err := r.Rewind("no such commit"); err == nil {
+		t.Error("Rewind found a commit that does not exist")
+	}
+}

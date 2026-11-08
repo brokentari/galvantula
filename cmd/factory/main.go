@@ -3,6 +3,7 @@
 //	factory serve    [-addr localhost:7070] [-db factory.db] [-runs runs] [-guardrails guardrails.yaml] [-ui ui/dist] [-workers 3]
 //	factory start    [-server http://localhost:7070] (-fake script.yaml | -spec spec.md) graph.yaml
 //	factory eval     [-server http://localhost:7070] [-db factory.db] [-runs runs] [-n 10] [-parallel 1] [-graph graphs/phase1.yaml] evals/<name>...
+//	factory mcp      [-server http://localhost:7070] [-graphs graphs]
 //	factory validate graph.yaml...
 //	factory standards [-guardrails guardrails.yaml] [-o AGENTS.md]
 package main
@@ -30,6 +31,7 @@ import (
 	"github.com/brokentari/galvantula/internal/executor"
 	"github.com/brokentari/galvantula/internal/graph"
 	"github.com/brokentari/galvantula/internal/guardrails"
+	"github.com/brokentari/galvantula/internal/mcp"
 	"github.com/brokentari/galvantula/internal/runner"
 	"github.com/brokentari/galvantula/internal/server"
 	"github.com/brokentari/galvantula/standards"
@@ -39,6 +41,7 @@ const usage = `usage:
   factory serve    [-addr localhost:7070] [-db factory.db] [-runs runs] [-guardrails guardrails.yaml] [-ui ui/dist] [-workers 3]
   factory start    [-server http://localhost:7070] (-fake script.yaml | -spec spec.md) graph.yaml
   factory eval     [-server http://localhost:7070] [-db factory.db] [-runs runs] [-n 10] [-parallel 1] [-graph graphs/phase1.yaml] evals/<name>...
+  factory mcp      [-server http://localhost:7070] [-graphs graphs]
   factory validate graph.yaml...
   factory standards [-guardrails guardrails.yaml] [-o AGENTS.md]`
 
@@ -53,6 +56,8 @@ func main() {
 		err = serve(args)
 	case "start":
 		err = start(args)
+	case "mcp":
+		err = serveMCP(args)
 	case "validate":
 		err = validate(args)
 	case "standards":
@@ -237,6 +242,18 @@ func startRun(addr string, req server.StartRequest) (string, error) {
 		return "", err
 	}
 	return created.ID, nil
+}
+
+// serveMCP runs the MCP server on standard input and output, for Claude Code.
+// Only protocol messages go to standard output; logs go to standard error.
+func serveMCP(args []string) error {
+	fs := flag.NewFlagSet("mcp", flag.ExitOnError)
+	addr := fs.String("server", "http://localhost:7070", "factory server")
+	graphs := fs.String("graphs", "graphs", "folder of graphs that factory_start may run")
+	fs.Parse(args)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	return mcp.Server{API: *addr, GraphsDir: *graphs}.Serve(ctx, os.Stdin, os.Stdout)
 }
 
 func validate(paths []string) error {

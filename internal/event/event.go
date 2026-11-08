@@ -115,6 +115,10 @@ type NodeFailedData struct {
 type GateDecidedData struct {
 	Approved bool   `json:"approved"`
 	Notes    string `json:"notes,omitempty"`
+	// Revise means the runtime sends a rejection back instead of failing the
+	// run: the gate and the nodes it waits for run again, and the notes are
+	// their feedback. The runtime decides this, so no reader repeats its rules.
+	Revise bool `json:"revise,omitempty"`
 }
 
 type RunStatus string
@@ -173,6 +177,7 @@ type NodeState struct {
 	LastError     string
 	LastClass     FailureClass
 	LastTaskError string // the last failure that was the node's own, the feedback for its retry
+	Revised       bool   // a person sent the node's work back; set until the node starts again
 	CostUSD       float64
 }
 
@@ -197,9 +202,19 @@ type State struct {
 	// and session belong to the old node.
 	GraphVersion int
 	Replans      int
+	// Revisions counts the rejections that sent work back.
+	Revisions int
 	// ReplanReason is why the last replan happened.
 	ReplanReason string
 	Retired      map[string]bool
+}
+
+// gateDeps returns the ids the gate waits for.
+func (s *State) gateDeps(gate string) []string {
+	if n, ok := s.Graph.Node(gate); ok {
+		return n.Deps
+	}
+	return nil
 }
 
 func (s *State) spend(n *NodeState, usd float64) {
@@ -276,7 +291,7 @@ func (s *State) Apply(e Event) error {
 	}
 	switch e.Type {
 	case NodeStarted:
-		n.Status, n.Attempt = Running, e.Attempt
+		n.Status, n.Attempt, n.Revised = Running, e.Attempt, false
 	case NodeSucceeded:
 		d, err := e.Decode[NodeSucceededData]()
 		if err != nil {
@@ -313,7 +328,18 @@ func (s *State) Apply(e Event) error {
 			return err
 		}
 		n.Status = Succeeded
-		if !d.Approved {
+		switch {
+		case d.Approved:
+		case d.Revise:
+			s.Revisions++
+			n.Status = Pending
+			for _, id := range s.gateDeps(e.Node) {
+				if dep := s.Nodes[id]; dep != nil {
+					*dep = NodeState{Status: Pending, Attempt: dep.Attempt, CostUSD: dep.CostUSD, Revised: true,
+						LastTaskError: "A person rejected your result at the gate. Their notes: " + d.Notes}
+				}
+			}
+		default:
 			n.Status = Failed
 			n.LastError = "rejected: " + d.Notes
 		}

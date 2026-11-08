@@ -111,6 +111,25 @@ func names(out string) []string {
 	return strings.FieldsFunc(out, func(r rune) bool { return r == 0 })
 }
 
+// Rewind puts main back to the last commit whose message is msg, and removes
+// everything after it. A gate that sends work back needs this, because the
+// work it rejected is already on main.
+func (r Repo) Rewind(msg string) error {
+	unlock := r.lock()
+	defer unlock()
+	out, err := r.git(r.Dir, "log", "--format=%H %s")
+	if err != nil {
+		return err
+	}
+	for line := range strings.Lines(out) {
+		if hash, subject, _ := strings.Cut(strings.TrimSpace(line), " "); subject == msg {
+			_, err := r.git(r.Dir, "reset", "-q", "--hard", hash)
+			return err
+		}
+	}
+	return fmt.Errorf("no commit %q on main", msg)
+}
+
 // Merge merges a node's branch into main. It fast-forwards when it can. When other
 // nodes merged first it makes a merge commit, which cannot conflict if the
 // nodes wrote different files, as their scopes require.

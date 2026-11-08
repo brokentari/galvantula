@@ -62,6 +62,8 @@ func New(store *event.Store, r *runner.Runner, rails guardrails.Guardrails, uiDi
 	mux.HandleFunc("GET /api/runs", s.listRuns)
 	mux.HandleFunc("POST /api/runs", s.startRun)
 	mux.HandleFunc("GET /api/runs/{run}/events", s.streamEvents)
+	mux.HandleFunc("GET /api/runs/{run}/state", s.getState)
+	mux.HandleFunc("GET /api/runs/{run}/logs", s.getLogs)
 	mux.HandleFunc("POST /api/runs/{run}/gates/{node}", s.decide)
 	if uiDir != "" {
 		mux.Handle("/", http.FileServer(http.Dir(uiDir)))

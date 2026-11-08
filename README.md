@@ -73,6 +73,36 @@ failed task fails the run. Each replan is a new version of the graph. The UI
 has a graph version menu that shows what each version added, changed and
 replaced.
 
+At the contract gate you may reject with notes. The runtime then sends the
+contract back to the architect: main goes back to the standards commit, and
+the architect gets your notes and the contract you rejected. `budget.revisions`
+in `guardrails.yaml` limits this. A rejection with no notes, or past the limit,
+ends the run.
+
+## Run the factory from Claude Code
+
+`plugin/` is a Claude Code plugin. It has an MCP server (`factory mcp`) and a
+`/factory` skill. The server runs on your machine and calls the factory's HTTP
+API, so Claude Code and the UI show the same runs. Its tools:
+
+| tool | what it does |
+|---|---|
+| `factory_start` | starts a run from a spec |
+| `factory_runs` | lists the runs |
+| `factory_status` | shows a run, and for each waiting gate what you must read to decide |
+| `factory_logs` | shows the last log lines of a node, or of every node |
+| `factory_approve` | approves or rejects a gate, with notes |
+
+Start the factory server, then start Claude Code from this repo with the plugin:
+
+```
+CLAUDE_CODE_OAUTH_TOKEN=... go run ./cmd/factory serve
+claude --plugin-dir ./plugin
+```
+
+Then type `/factory` and describe the program. The plugin's server starts with
+`go run`, from the repo that holds the plugin, so keep the plugin in this repo.
+
 Each run's product is a git repo in `runs/<run>/repo`. The agent works in
 `runs/<run>/nodes/<node>`; the runtime commits and merges its work after the
 check passes. `guardrails.yaml` sets the spending and time limits for each
@@ -128,6 +158,7 @@ builder.
 | command | what it does |
 |---|---|
 | `go run ./cmd/factory standards -o AGENTS.md` | rewrites the standards block |
+| `go run ./cmd/factory mcp` | the MCP server for Claude Code; the plugin starts it |
 | `go run ./cmd/evalgen evals/<name>` | writes an eval's hidden tests with the eval author model, then checks them |
 | `go run ./cmd/phasereview -phase phase-N -base <ref>` | a new session with the reviewer model reviews a phase; see `AGENTS.md` |
 

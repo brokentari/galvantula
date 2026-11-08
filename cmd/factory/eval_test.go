@@ -263,10 +263,10 @@ func TestParallelism(t *testing.T) {
 		ev(event.NodeSucceeded, "a", nil),
 		ev(event.NodeFailed, "b", event.NodeFailedData{Error: "merge conflict: node b", Class: event.Task}),
 	}
-	if maxRunning, conflicts := parallelism(evs, g); maxRunning != 2 || conflicts != 1 {
-		t.Errorf("parallelism = %d, %d; want 2 and 1", maxRunning, conflicts)
+	if maxRunning, conflicts, attempts := parallelism(evs, g); maxRunning != 2 || conflicts != 1 || attempts != 3 {
+		t.Errorf("parallelism = %d, %d, %d; want 2, 1 and 3 attempts", maxRunning, conflicts, attempts)
 	}
-	if maxRunning, _ := parallelism(evs[:5], g); maxRunning != 1 {
+	if maxRunning, _, _ := parallelism(evs[:5], g); maxRunning != 1 {
 		t.Errorf("with only a started, parallelism = %d, want 1", maxRunning)
 	}
 }
