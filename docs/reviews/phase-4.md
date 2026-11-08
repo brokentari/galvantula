@@ -1,25 +1,23 @@
 # Review: phase-4
 
-Reviewer: claude-sonnet-5-5 at medium effort, in a new session. Range: 31f5573..28617c1. Date: 2026-11-07. Cost: $0.19.
+Reviewer: claude-sonnet-5-5 at medium effort, in a new session. Range: 31f5573..3cb8a98. Date: 2026-11-07. Cost: $0.19.
 
-What this change does: Phase 4 adds replanning. When a task fails its last retry, the runtime removes it and its dependents. It then runs the planner again for those packages and records each replan as a new graph version. The change also adds `-planted` evals, which start a run from a flawed first plan, and a UI menu that shows what each graph version changed.
+What this change does: Phase 4 adds replanning. When a task fails its last retry with a task-class error, the runtime removes it and its dependents, inserts a `replan-N` plan node and a slot, and asks the planner to plan those packages again. This is capped by `budget.replans`. Each graph change gets a version number. Evals can plant a flawed first plan with `-planted`, and the UI has a version menu that shows what each version added, changed and removed.
 
-I found no Must fix. I assumed the load the README describes: one operator, a few runs at a time. I checked the replan, event-fold and fill logic by reading them. I could not run any tests.
+I found no Must fix or Should fix items. I read the diff and traced these paths:
 
-**Should fix**
-
-1. **The planted-plan docs omit the graph flag** (`evals/README.md`, "Plant a planner mistake")
-   - **What this is:** The section tells the reader to run `factory eval -planted <name>` to test replanning.
-   - **Problem:** `-graph` defaults to `graphs/phase1.yaml` (`cmd/factory/eval.go`). I did not read that file. The diff gives no sign that it has a plan node. The planted plan is used only by a plan node. If phase1 has none, the run never reads the plan, `replans` stays 0, and the result still records `planted`. The reader would think replanning worked, or was never needed.
-   - **Fix:** Add `-graph graphs/phase4.yaml` to the command in the docs. Or make `-planted` fail when the chosen graph has no plan node.
-   - **If we skip it:** An operator who runs the documented command may read a pass with 0 replans as a successful replan test.
-
-2. **A kept task that fails while a replan is open can fail the run despite spare replans** (`internal/runner/runner.go`, `replan` and `awaitsReplan`)
-   - **What this is:** The replan planner node depends on the kept tasks that the removed tasks needed.
-   - **Problem:** Suppose one of those kept tasks fails while the planner waits for it. `replan()` skips because a replan slot is open, and the planner can never start because its dep failed. I did not read `finished()`, but the run most likely ends with "nodes can never start", although `budget.replans` is not used up.
-   - **Fix:** A test for this case would show what happens. If it does fail, make the planner depend only on kept tasks that have already merged, or add a `shortcut:` comment that states the limit.
-   - **If we skip it:** In some parallel runs a second failure ends the run instead of triggering a replan. This costs wasted spend, not data loss.
+- **Graph edit:** `Graph.Replan` and `Fill` produce the right dependencies for dependents and for new tasks that depend on kept tasks.
+- **Failure cases:**
+  - Infra and limit failures do not trigger a replan.
+  - A replan stops while an earlier replan slot is open.
+  - It stops once the run budget or the replan budget is spent.
+  - A kept task that fails while a replan waits gets its own replan.
+- **Restart:** `drive` runs `replan` on its first loop, so a crash between a task's last failure and the replan loses nothing.
+- **Event fold:** `Apply` removes replaced nodes and records them in `Retired`, and `fillSlot` rejects retired ids. This stops a new node from reusing an old worktree, branch or session.
+- **Planted plans:** the server validates a planted plan with `plan.Parse`, and `planReport` validates it again. It is used only for the first plan node and not for replans. Invalid input fails with a clear error before any run starts.
+- **UI:** the diff and ghost nodes handle a missing version and a missing node state.
+- **Tests:** replan, retired ids, bounds, limit failures, restart, kept-task failure, planted plans and the event fold all have tests.
 
 Verdict: Ship.
 
-Not checked: I did not run the Go or UI tests. I did not read `finished()`, `stopReason`'s budget branch, or `graphs/phase1.yaml`.
+Not checked: I could not run the tests. I did not read `internal/plan/plan.go` in full, so I assumed `plan.Validate` accepts a dependency on a kept task, as `TestReplanPlansOnlyTheFreePackages` implies.
