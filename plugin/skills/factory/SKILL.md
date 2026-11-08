@@ -37,6 +37,7 @@ user must read: the contract at `approve-contract`, the task list and cost ceili
 3. Call `factory_approve` with their answer. To send the contract back to the architect,
    reject it and pass their notes. A rejection without notes ends the run. The run allows
    a few revisions, and `factory_status` shows how many it has used.
+   Only the contract can go back. Rejecting the task graph ends the run.
 4. Go back to following the run.
 
 ## When it ends
