@@ -20,9 +20,11 @@ type Role struct {
 }
 
 type Guardrails struct {
-	Go     GoTarget `yaml:"go" json:"go"`
-	Budget Budget   `yaml:"budget" json:"budget"`
-	Models Models   `yaml:"models" json:"models"`
+	Go GoTarget `yaml:"go" json:"go"`
+	// ConciseOutput tells each agent to keep its replies short.
+	ConciseOutput bool   `yaml:"concise_output" json:"concise_output"`
+	Budget        Budget `yaml:"budget" json:"budget"`
+	Models        Models `yaml:"models" json:"models"`
 }
 
 // GoTarget is the Go version every product's go.mod names.

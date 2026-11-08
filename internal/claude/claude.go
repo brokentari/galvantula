@@ -25,6 +25,7 @@ type Options struct {
 	Model        string
 	Effort       string
 	SystemFile   string   // appended to the system prompt
+	Style        string   // text appended to the system prompt after SystemFile; empty adds none
 	Tools        []string // built-in tools the session may see
 	Allow        []string // permission rules that need no prompt, such as "Bash(go test *)"
 	Mode         string   // permission mode; anything that would prompt is denied
@@ -97,6 +98,9 @@ func Run(ctx context.Context, o Options) (Result, error) {
 	}
 	if o.SystemFile != "" {
 		args = append(args, "--append-system-prompt-file", o.SystemFile)
+	}
+	if o.Style != "" {
+		args = append(args, "--append-system-prompt", o.Style)
 	}
 	if o.SessionID != "" {
 		args = append(args, "--session-id", o.SessionID)

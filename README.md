@@ -112,8 +112,8 @@ imports it. Its standards block comes from pinned copies of three skills in
 and orwell-writing (plain English). Phase 1's standards node writes the same
 block into every product.
 
-`guardrails.yaml` sets the target Go version and the model and effort for each
-role. Sonnet 5.5 builds. Opus 5.5 writes the eval tests, and it is never a
+`guardrails.yaml` sets the target Go version, the model and effort for each
+role, and `concise_output`, which tells every agent to keep its replies short. Sonnet 5.5 builds. Opus 5.5 writes the eval tests, and it is never a
 builder.
 
 | command | what it does |

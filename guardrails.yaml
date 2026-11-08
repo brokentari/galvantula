@@ -4,6 +4,9 @@
 go:
   version: "1.27" # the go line in each product's go.mod; also filters the Go guidelines
 
+# Tell every agent to keep its replies short. Files it writes are not affected.
+concise_output: true
+
 # Spending and time limits. A node that reaches its limit fails that attempt.
 budget:
   node_usd: 3        # most one agent attempt may spend

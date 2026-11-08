@@ -152,7 +152,12 @@ func (c Claude) agent(ctx context.Context, repo workspace.Repo, t Task, log func
 			return Result{}, err
 		}
 	}
+	var style string
+	if c.Rails.ConciseOutput {
+		style = ConciseStyle
+	}
 	opts := claude.Options{
+		Style:        style,
 		Dir:          wt,
 		Model:        role.Model,
 		Effort:       role.Effort,

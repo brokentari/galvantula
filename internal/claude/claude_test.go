@@ -123,3 +123,14 @@ func TestRunReportsCancel(t *testing.T) {
 		t.Error("Run kept waiting after the cancel")
 	}
 }
+
+func TestRunAppendsStyle(t *testing.T) {
+	args := filepath.Join(t.TempDir(), "args")
+	fakeClaude(t, `echo "$@" > `+args+`; echo '{"type":"result","is_error":false,"result":"ok"}'`)
+	if _, err := Run(t.Context(), Options{Dir: t.TempDir(), Prompt: "x", Model: "m", Effort: "low", Mode: "dontAsk", Style: "be brief"}); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(args); !strings.Contains(string(got), "--append-system-prompt be brief") {
+		t.Errorf("args %q lack the style", got)
+	}
+}

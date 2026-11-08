@@ -49,6 +49,10 @@ type rolePlan struct {
 	after func(repo workspace.Repo, log func(string))
 }
 
+// ConciseStyle is the instruction that guardrails.yaml's concise_output adds
+// to each agent. It limits the chat replies, not the files an agent writes.
+const ConciseStyle = "Keep every reply to the user short and plain. State the result and nothing else: no preamble, no recap of what you did, no praise. The report a reviewer or planner must give is exempt, and so are the files you write."
+
 const rules = `- Use only the standard library.
 - Do not leave build output, such as compiled programs, in the directory.
 - Do not use t.Skip, t.Skipf or t.SkipNow: the check fails if a test file has one.

@@ -49,6 +49,7 @@ export interface GraphUpdatedData {
 
 export interface Guardrails {
   go: GoTarget;
+  concise_output: boolean;
   budget: Budget;
   models: Models;
 }
