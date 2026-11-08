@@ -64,6 +64,15 @@ second gate (evals skip it with `-auto-approve`). Tasks that do not depend on
 each other run at the same time, each in its own worktree, and the runtime
 merges each into main when its check passes.
 
+`graphs/phase4.yaml` has the same nodes and adds replanning. When a task
+fails its last retry, the runtime takes it out, with the tasks that depend on
+it, and runs the planner again for their packages. The tasks that stay are not
+touched, and a new task may depend on one of them. `budget.replans` in
+`guardrails.yaml` limits how many times a run may do this. Past the limit, a
+failed task fails the run. Each replan is a new version of the graph. The UI
+has a graph version menu that shows what each version added, changed and
+replaced.
+
 Each run's product is a git repo in `runs/<run>/repo`. The agent works in
 `runs/<run>/nodes/<node>`; the runtime commits and merges its work after the
 check passes. `guardrails.yaml` sets the spending and time limits for each

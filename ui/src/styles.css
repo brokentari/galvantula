@@ -132,6 +132,9 @@ button.link { border: 0; background: none; padding: 0; color: var(--accent); }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--line); flex: none; }
 
 .card.kind-gate { border-radius: 999px; padding-inline: 18px; border-color: var(--gate); }
+.card.mark-added { box-shadow: 0 0 0 2px var(--ok); }
+.card.mark-changed { box-shadow: 0 0 0 2px var(--gate); }
+.card.mark-removed { border-style: dashed; opacity: 0.55; text-decoration: line-through; box-shadow: 0 0 0 2px var(--bad); }
 .card.kind-slot { border-style: dashed; background: transparent; }
 .card.kind-plan { border-style: double; border-width: 3px; }
 

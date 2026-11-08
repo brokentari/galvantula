@@ -105,7 +105,7 @@ nodes:
 	}{
 		{"empty", nil, "emitted no nodes"},
 		{"nested plan", []Node{{ID: "p2", Kind: Plan}}, "may not emit plan nodes"},
-		{"dep outside emission", []Node{{ID: "a", Kind: Agent, Deps: []string{"plan"}}}, "only on each other"},
+		{"dep outside emission", []Node{{ID: "a", Kind: Agent, Deps: []string{"plan"}}}, "only on each other or on tasks that stay"},
 		{"id clash", []Node{{ID: "plan", Kind: Agent}}, "duplicate id"},
 	}
 	for _, tt := range tests {
@@ -179,6 +179,13 @@ nodes:
 	}
 	if n, _ := filled.Node("a2"); !slices.Equal(n.Deps, []string{"replan-1"}) {
 		t.Errorf("a2 deps = %v, want the plan node", n.Deps)
+	}
+	kept, err := out.Fill("replan-1-tasks", []Node{{ID: "a2", Kind: Agent, Role: "implementer", Scope: []string{"a"}, Deps: []string{"c"}}})
+	if err != nil {
+		t.Fatalf("a new task could not depend on a task that stays: %v", err)
+	}
+	if n, _ := kept.Node("a2"); !slices.Equal(n.Deps, []string{"c"}) {
+		t.Errorf("a2 deps = %v, want c", n.Deps)
 	}
 	if _, _, err := g.Replan("review", Node{ID: "p", Kind: Plan}, "s"); err == nil {
 		t.Error("Replan accepted a node that is not a task")

@@ -92,11 +92,22 @@ Why the task failed:
 The packages below are the ones to plan again. On main they are still stubs. Use the same rules as before, with these changes:
 - Give each package below to exactly one task, and no other package. The kept tasks own the others.
 - Do not repeat the failure. Change the scope, the split or the deps so that the failure cannot happen again.
-- A task may depend on the ids of the other new tasks only. The kept tasks are merged or running already.
+- A task may depend on the other new tasks, and on the kept tasks below. A dependency on a kept task makes the new task wait for its merge. Use one when the new task needs that code to work.
+- The kept tasks, with the packages each owns:
+%s
 - Do not use any of these ids, because they belong to replaced tasks: %s.
 - Do not use the ids standards, architect, plan, tasks, review, fix or verify, or an id that starts with approve- or replan-.
 
 `
+
+// brief tells the planner why the task failed, which tasks stay and which ids it may not use.
+func (r *Replan) brief() string {
+	var kept []string
+	for _, k := range r.Kept {
+		kept = append(kept, fmt.Sprintf("  - %s: %s", k.ID, strings.Join(k.Scope, ", ")))
+	}
+	return fmt.Sprintf(replanBrief, r.Reason, strings.Join(kept, "\n"), strings.Join(r.Retired, ", "))
+}
 
 // replanPackages lists the packages that a replan must plan again: the
 // packages of the contract that no kept task owns.
@@ -104,7 +115,9 @@ func replanPackages(pkgs []string, r *Replan) []string {
 	if r == nil {
 		return pkgs
 	}
-	return slices.DeleteFunc(slices.Clone(pkgs), func(p string) bool { return slices.Contains(r.Kept, p) })
+	return slices.DeleteFunc(slices.Clone(pkgs), func(p string) bool {
+		return slices.ContainsFunc(r.Kept, func(k Kept) bool { return slices.Contains(k.Scope, p) })
+	})
 }
 
 // plannerPrompt lists the contract's packages for the planner.
@@ -123,7 +136,7 @@ func plannerPrompt(repo workspace.Repo, t Task) (string, error) {
 	}
 	brief := fmt.Sprintf(plannerBrief, plan.MaxTasks, plan.MaxDepth, plan.Schema, strings.Join(list, "\n"))
 	if t.Replan != nil {
-		brief = fmt.Sprintf(replanBrief, t.Replan.Reason, strings.Join(t.Replan.Retired, ", ")) + brief
+		brief = t.Replan.brief() + brief
 	}
 	return brief, nil
 }

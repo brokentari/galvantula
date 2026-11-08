@@ -105,7 +105,7 @@ func (r *Runner) fromState(st *event.State) (executor.Executor, error) {
 		if r.Auth == "" {
 			return nil, errNoAuth
 		}
-		return executor.Claude{Root: r.Root, Rails: st.Rails, Spec: st.Spec, Auth: r.Auth}, nil
+		return executor.Claude{Root: r.Root, Rails: st.Rails, Spec: st.Spec, PlantedPlan: st.PlantedPlan, Auth: r.Auth}, nil
 	}
 	return nil, fmt.Errorf("unknown executor %q", st.Executor)
 }
@@ -122,6 +122,9 @@ type Run struct {
 	Rails      guardrails.Guardrails
 	// AutoApprove approves every gate without a human. Eval runs use it.
 	AutoApprove bool
+	// PlantedPlan is a plan.Output as JSON. The claude executor uses it for the
+	// first plan node. Eval runs use it.
+	PlantedPlan string
 }
 
 // Start records a new run and starts driving it.
@@ -142,6 +145,11 @@ func (r *Runner) Start(run Run) (string, error) {
 		if err := run.Rails.Validate(); err != nil {
 			return invalid(err)
 		}
+		if run.PlantedPlan != "" {
+			if _, err := plan.Parse(run.PlantedPlan); err != nil {
+				return invalid(fmt.Errorf("planted plan: %w", err))
+			}
+		}
 		if r.Auth == "" {
 			return invalid(errNoAuth)
 		}
@@ -149,7 +157,7 @@ func (r *Runner) Start(run Run) (string, error) {
 		return invalid(fmt.Errorf("unknown executor %q", run.Executor))
 	}
 	id := "r-" + strings.ToLower(rand.Text()[:10])
-	data := event.RunCreatedData{Graph: run.Graph, Executor: run.Executor, FakeScript: run.FakeScript, Spec: run.Spec, Guardrails: run.Rails, Commit: r.Commit, AutoApprove: run.AutoApprove}
+	data := event.RunCreatedData{Graph: run.Graph, Executor: run.Executor, FakeScript: run.FakeScript, Spec: run.Spec, Guardrails: run.Rails, Commit: r.Commit, AutoApprove: run.AutoApprove, PlantedPlan: run.PlantedPlan}
 	if _, err := r.store.Append(event.New(id, event.RunCreated, "", 0, data)); err != nil {
 		return "", err
 	}
@@ -529,7 +537,7 @@ func replanBrief(st *event.State) *executor.Replan {
 	b := &executor.Replan{Reason: st.ReplanReason, Retired: slices.Sorted(maps.Keys(st.Retired))}
 	for _, n := range st.Graph.Nodes {
 		if n.IsTask() {
-			b.Kept = append(b.Kept, n.Scope...)
+			b.Kept = append(b.Kept, executor.Kept{ID: n.ID, Scope: n.Scope})
 		}
 	}
 	return b

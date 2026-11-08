@@ -14,10 +14,19 @@ export interface RunView {
   id: string;
   graph: Graph;
   graphVersion: number;
+  versions: GraphVersion[]; // every graph the run has had, oldest first
   status: RunStatus;
   reason?: string;
   costUSD: number;
   nodes: Record<string, NodeView>;
+}
+
+// GraphVersion is a graph the run had, and why it changed.
+export interface GraphVersion {
+  version: number;
+  graph: Graph;
+  reason: string;
+  replaced: string[]; // tasks a replan took out
 }
 
 const maxLogLines = 200;
@@ -35,15 +44,20 @@ export function fold(events: FactoryEvent[]): RunView | undefined {
 export function apply(run: RunView | undefined, e: FactoryEvent): RunView | undefined {
   if (e.type === "run_created") {
     const nodes = Object.fromEntries(e.data.graph.nodes.map((n) => [n.id, blank()]));
-    return { id: e.run, graph: e.data.graph, graphVersion: 1, status: "running", costUSD: 0, nodes };
+    const first = { version: 1, graph: e.data.graph, reason: "the graph the run started with", replaced: [] };
+    return { id: e.run, graph: e.data.graph, graphVersion: 1, versions: [first], status: "running", costUSD: 0, nodes };
   }
   if (!run) return run;
   if (e.type === "graph_updated") {
-    const nodes = Object.fromEntries(e.data.graph.nodes.map((n) => [n.id, run.nodes[n.id] ?? blank()]));
+    // A replaced task's state ends with it, so a new node never inherits it.
+    const replaced = new Set(e.data.replaced ?? []);
+    const nodes = Object.fromEntries(e.data.graph.nodes.map((n) => [n.id, (!replaced.has(n.id) && run.nodes[n.id]) || blank()]));
     // The plan node that emitted the nodes succeeds in this same event.
     const cost = e.data.cost_usd ?? 0;
     if (e.node && nodes[e.node]) nodes[e.node] = { ...nodes[e.node], status: "succeeded", costUSD: nodes[e.node].costUSD + cost };
-    return { ...run, graph: e.data.graph, graphVersion: run.graphVersion + 1, costUSD: run.costUSD + cost, nodes };
+    const version = e.data.version ?? run.graphVersion + 1; // logs from before versions have none
+    const next = { version, graph: e.data.graph, reason: e.data.reason, replaced: e.data.replaced ?? [] };
+    return { ...run, graph: e.data.graph, graphVersion: version, versions: [...run.versions, next], costUSD: run.costUSD + cost, nodes };
   }
   if (e.type === "run_finished") {
     return { ...run, status: e.data.status, reason: e.data.reason };
@@ -86,6 +100,24 @@ export function apply(run: RunView | undefined, e: FactoryEvent): RunView | unde
   }
   const spent = next.costUSD - n.costUSD;
   return { ...run, costUSD: run.costUSD + spent, nodes: { ...run.nodes, [e.node]: next } };
+}
+
+export interface GraphDiff {
+  added: string[];
+  removed: string[];
+  changed: string[]; // the node stays, but its dependencies or scope differ
+}
+
+// diffGraphs says what a later version of a graph added, removed and changed.
+export function diffGraphs(from: Graph, to: Graph): GraphDiff {
+  const before = new Map(from.nodes.map((n) => [n.id, n]));
+  const after = new Map(to.nodes.map((n) => [n.id, n]));
+  const key = (n: Graph["nodes"][number]) => JSON.stringify([n.deps ?? [], n.scope ?? []]);
+  return {
+    added: to.nodes.filter((n) => !before.has(n.id)).map((n) => n.id),
+    removed: from.nodes.filter((n) => !after.has(n.id)).map((n) => n.id),
+    changed: to.nodes.filter((n) => before.has(n.id) && key(before.get(n.id)!) !== key(n)).map((n) => n.id),
+  };
 }
 
 // layout puts each node in the column of its longest dependency chain.

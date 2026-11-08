@@ -1,0 +1,65 @@
+# Phase 4: replanning. The nodes are phase 3's. What is new is in the runtime:
+# when a task node fails its last retry, the runtime takes it out, with the
+# tasks that depend on it, and runs the planner again for their packages. The
+# tasks that stay are not touched, and a new task may depend on one of them.
+# Each replan is a new version of this graph, and the UI shows what changed.
+# guardrails.yaml sets how many replans a run may make (budget.replans); past
+# that, a failed task fails the run. There is no gate: the run's budget and
+# the replan limit bound the cost.
+name: phase4
+nodes:
+  - id: standards
+    title: Write AGENTS.md, spec.md and go.mod
+    kind: tool
+    role: standards
+
+  - id: architect
+    title: Interfaces, stubs, acceptance tests, CONTRACT.md
+    kind: agent
+    role: architect
+    deps: [standards]
+    retries: 2
+
+  - id: approve-contract
+    title: Approve the contract
+    kind: gate
+    deps: [architect]
+
+  - id: plan
+    title: Split the work into tasks
+    kind: plan
+    role: planner
+    deps: [approve-contract]
+    retries: 2
+
+  - id: approve-tasks
+    title: Approve the task graph and its cost
+    kind: gate
+    deps: [plan]
+
+  - id: tasks
+    title: Generated task graph
+    kind: slot
+    filled_by: plan
+    deps: [approve-tasks]
+
+  - id: review
+    title: ponytail-review, advisory
+    kind: agent
+    role: reviewer
+    advisory: true
+    deps: [tasks]
+
+  - id: fix
+    title: Answer the review findings, if any
+    kind: agent
+    role: fixer
+    advisory: true
+    deps: [review]
+    retries: 1
+
+  - id: verify
+    title: Whole suite with -race
+    kind: tool
+    role: verify
+    deps: [fix]

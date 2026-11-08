@@ -4,6 +4,7 @@ export interface Budget {
   node_usd: number;
   run_usd: number;
   node_minutes: number;
+  replans: number;
 }
 
 export interface DecideRequest {
@@ -107,6 +108,7 @@ export interface RunCreatedData {
   guardrails?: Guardrails;
   commit?: string;
   auto_approve?: boolean;
+  planted_plan?: string;
 }
 
 export interface RunFinishedData {

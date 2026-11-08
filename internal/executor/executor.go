@@ -29,13 +29,19 @@ type Task struct {
 	Replan *Replan
 }
 
+// Kept is a task that a replan leaves in place.
+type Kept struct {
+	ID    string
+	Scope []string
+}
+
 // Replan tells the planner what went wrong and what it may not change.
 type Replan struct {
 	// Reason is why the task failed.
 	Reason string
-	// Kept lists the scopes of the tasks that stay. The planner plans the
-	// other packages again.
-	Kept []string
+	// Kept lists the tasks that stay. The planner plans the other packages
+	// again, and a new task may depend on a kept one.
+	Kept []Kept
 	// Retired lists the ids of replaced tasks. A new task may not use one.
 	Retired []string
 }

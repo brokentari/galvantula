@@ -178,7 +178,7 @@ func TestScopeViolations(t *testing.T) {
 }
 
 func TestReplanBriefNamesTheFailureAndTheFreePackages(t *testing.T) {
-	r := &Replan{Reason: "the check failed: import cycle", Kept: []string{"internal/parse"}, Retired: []string{"render", "cli"}}
+	r := &Replan{Reason: "the check failed: import cycle", Kept: []Kept{{ID: "parse", Scope: []string{"internal/parse"}}}, Retired: []string{"render", "cli"}}
 	pkgs := replanPackages([]string{"cmd/x", "internal/parse", "internal/render"}, r)
 	if want := []string{"cmd/x", "internal/render"}; !slices.Equal(pkgs, want) {
 		t.Fatalf("packages to plan again: %v, want %v", pkgs, want)
@@ -186,10 +186,49 @@ func TestReplanBriefNamesTheFailureAndTheFreePackages(t *testing.T) {
 	if got := replanPackages([]string{"a", "b"}, nil); len(got) != 2 {
 		t.Errorf("without a replan every package is planned: %v", got)
 	}
-	brief := fmt.Sprintf(replanBrief, r.Reason, strings.Join(r.Retired, ", "))
-	for _, want := range []string{"import cycle", "render, cli"} {
+	brief := r.brief()
+	for _, want := range []string{"import cycle", "render, cli", "parse: internal/parse"} {
 		if !strings.Contains(brief, want) {
 			t.Errorf("the brief lacks %q", want)
 		}
+	}
+}
+
+const plantedTasks = `{"tasks": [{"id": "b", "title": "b", "scope": ["pkgb"], "deps": []}, {"id": "a", "title": "a", "scope": ["pkga"], "deps": []}]}`
+
+// An eval plants the first plan. The planner does not run, and the plan
+// still goes through validation.
+func TestPlantedPlanReplacesTheFirstPlanner(t *testing.T) {
+	c, _ := setUpRun(t)
+	fakeAgents(t, map[string]string{"architect": twoPackages(), "plan": planJSON(taskJSON("x", "pkga"), taskJSON("y", "pkgb"))})
+	mustRun(t, c, architect)
+	c.PlantedPlan = plantedTasks
+	res, log, err := runPlanner(t, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Nodes) != 2 || res.Nodes[0].ID != "b" || !strings.Contains(log, "planted plan") {
+		t.Errorf("nodes %+v, log:\n%s", res.Nodes, log)
+	}
+	c.PlantedPlan = `{"tasks": [{"id": "a", "title": "a", "scope": ["pkga"], "deps": []}]}`
+	if _, _, err := runPlanner(t, c); err == nil || !strings.Contains(err.Error(), "pkgb") {
+		t.Errorf("a planted plan skipped validation: %v", err)
+	}
+}
+
+// A replan plans the packages that no kept task owns, and may depend on a kept task.
+func TestReplanPlansOnlyTheFreePackages(t *testing.T) {
+	c, _ := setUpRun(t)
+	fakeAgents(t, map[string]string{"architect": twoPackages(), "replan-1": planJSON(taskJSON("b2", "pkgb", "a"))})
+	mustRun(t, c, architect)
+	c.PlantedPlan = plantedTasks // a replan must not use it
+	replan := Task{Run: "r", Attempt: 1, Node: graph.Node{ID: "replan-1", Kind: graph.Plan},
+		Replan: &Replan{Reason: "boom", Kept: []Kept{{ID: "a", Scope: []string{"pkga"}}}, Retired: []string{"b"}}}
+	res, err := c.Run(t.Context(), replan, func(string) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Nodes) != 1 || res.Nodes[0].ID != "b2" || res.Nodes[0].Deps[0] != "a" {
+		t.Errorf("nodes %+v", res.Nodes)
 	}
 }

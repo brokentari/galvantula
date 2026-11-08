@@ -66,6 +66,8 @@ type RunCreatedData struct {
 	// AutoApprove makes the runtime approve every gate itself, as eval runs
 	// need, since no human is there. The decision's notes say so.
 	AutoApprove bool `json:"auto_approve,omitempty"`
+	// PlantedPlan is the planner's JSON answer for an eval that plants a flawed plan.
+	PlantedPlan string `json:"planted_plan,omitempty"`
 }
 
 // GraphUpdatedData is also how a plan node succeeds; CostUSD is that attempt's cost.
@@ -184,6 +186,7 @@ type State struct {
 	Rails       guardrails.Guardrails
 	Commit      string
 	AutoApprove bool
+	PlantedPlan string
 	CostUSD     float64
 	Status      RunStatus
 	Reason      string
@@ -224,7 +227,7 @@ func (s *State) Apply(e Event) error {
 			return err
 		}
 		*s = State{Run: e.Run, Graph: d.Graph, Executor: d.Executor, FakeScript: d.FakeScript,
-			Spec: d.Spec, Rails: d.Guardrails, Commit: d.Commit, AutoApprove: d.AutoApprove, Status: RunRunning, Nodes: map[string]*NodeState{}, GraphVersion: 1, Retired: map[string]bool{}}
+			Spec: d.Spec, Rails: d.Guardrails, Commit: d.Commit, AutoApprove: d.AutoApprove, PlantedPlan: d.PlantedPlan, Status: RunRunning, Nodes: map[string]*NodeState{}, GraphVersion: 1, Retired: map[string]bool{}}
 		for _, n := range d.Graph.Nodes {
 			s.Nodes[n.ID] = &NodeState{Status: Pending}
 		}

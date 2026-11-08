@@ -222,8 +222,9 @@ func (g Graph) dependsOn(id, ancestor string, byID map[string]Node) bool {
 	return false
 }
 
-// Fill replaces a slot with the nodes a plan emitted. Emitted nodes with no
-// deps take the slot's deps. Nodes that depended on the slot now depend on
+// Fill replaces a slot with the nodes a plan emitted. An emitted node may
+// depend on another emitted node, or on a task already in the graph, which a
+// replan leaves in place. Emitted nodes with no deps take the slot's deps. Nodes that depended on the slot now depend on
 // the emitted nodes that nothing else in the emission depends on.
 func (g Graph) Fill(slotID string, emitted []Node) (Graph, error) {
 	slot, ok := g.Node(slotID)
@@ -244,8 +245,8 @@ func (g Graph) Fill(slotID string, emitted []Node) (Graph, error) {
 			return Graph{}, fmt.Errorf("node %q: a plan may not emit %s nodes", e.ID, e.Kind)
 		}
 		for _, d := range e.Deps {
-			if !ids[d] {
-				return Graph{}, fmt.Errorf("node %q: emitted nodes may depend only on each other, not on %q", e.ID, d)
+			if kept, ok := g.Node(d); !ids[d] && !(ok && kept.IsTask()) {
+				return Graph{}, fmt.Errorf("node %q: emitted nodes may depend only on each other or on tasks that stay, not on %q", e.ID, d)
 			}
 			used[d] = true
 		}

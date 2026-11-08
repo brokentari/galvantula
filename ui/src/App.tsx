@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { FactoryEvent, RunSummary } from "./gen/events";
-import { GraphView } from "./GraphView";
+import { GraphView, type Marks } from "./GraphView";
 import { NodePanel } from "./NodePanel";
-import { apply, describe, fold, type RunView } from "./state";
+import { apply, describe, diffGraphs, fold, type RunView } from "./state";
+import type { Graph } from "./gen/events";
 
 const playStepMs = 350;
 
@@ -67,6 +68,7 @@ export function App() {
   const [cursor, setCursor] = useState<number | null>(null); // null means live
   const [playing, setPlaying] = useState(false);
   const [selected, setSelected] = useState<string>();
+  const [version, setVersion] = useState<number | null>(null); // null means the latest graph
 
   // Live mode shows the growing list itself, so a new event copies nothing. count is a
   // dependency because events changes in place.
@@ -92,8 +94,23 @@ export function App() {
     setCursor(null);
     setPlaying(false);
     setSelected(undefined);
+    setVersion(null);
   }
 
+  // Looking at an earlier version shows what it changed: the tasks it added,
+  // the ones it changed, and (as ghosts) the ones it took out.
+  const { graph, marks }: { graph?: Graph; marks: Marks } = useMemo(() => {
+    if (!run) return { marks: {} };
+    const at = run.versions.findIndex((v) => v.version === version);
+    if (at < 1) return { graph: run.graph, marks: {} };
+    const d = diffGraphs(run.versions[at - 1].graph, run.versions[at].graph);
+    const marks: Marks = {};
+    for (const id of d.added) marks[id] = "added";
+    for (const id of d.changed) marks[id] = "changed";
+    for (const id of d.removed) marks[id] = "removed";
+    const ghosts = run.versions[at - 1].graph.nodes.filter((n) => marks[n.id] === "removed");
+    return { graph: { ...run.versions[at].graph, nodes: [...run.versions[at].graph.nodes, ...ghosts] }, marks };
+  }, [run, version]);
   const waiting = run ? run.graph.nodes.filter((n) => run.nodes[n.id]?.status === "waiting") : [];
   const recent = shown.slice(-40).reverse();
 
@@ -110,6 +127,16 @@ export function App() {
           ))}
         </select>
         {run && <span className={`badge status-${run.status}`}>{run.status}</span>}
+        {run && run.versions.length > 1 && (
+          <select value={version ?? ""} onChange={(e) => setVersion(e.target.value ? Number(e.target.value) : null)} aria-label="Graph version">
+            <option value="">graph v{run.graphVersion} (latest)</option>
+            {run.versions.slice(1).map((v) => (
+              <option key={v.version} value={v.version}>
+                v{v.version}: {v.reason.slice(0, 60)}
+              </option>
+            ))}
+          </select>
+        )}
         {waiting.map((g) => (
           <button key={g.id} className="gate-chip" onClick={() => setSelected(g.id)}>
             {g.id} waits for you
@@ -119,8 +146,8 @@ export function App() {
 
       <main className="body">
         <div className="canvas">
-          {run ? (
-            <GraphView run={run} selected={selected} onSelect={setSelected} />
+          {run && graph ? (
+            <GraphView run={run} graph={graph} marks={marks} selected={selected} onSelect={setSelected} />
           ) : (
             <div className="empty">
               <p>No run to show.</p>

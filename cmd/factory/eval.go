@@ -51,6 +51,10 @@ type evalResult struct {
 	// from a plan should make it 2 or more.
 	MaxParallel    int `json:"max_parallel,omitzero"`
 	MergeConflicts int `json:"merge_conflicts,omitzero"`
+	// Planted names the flawed first plan the run started with. Replans is how
+	// many times the run replaced a failed task.
+	Planted string `json:"planted,omitempty"`
+	Replans int    `json:"replans,omitzero"`
 }
 
 // parallelism returns the most agent nodes that ran at once, and how many
@@ -94,6 +98,7 @@ func runEvals(args []string) error {
 	n := fs.Int("n", 10, "runs per eval")
 	parallel := fs.Int("parallel", 1, "runs at the same time")
 	graphPath := fs.String("graph", "graphs/phase1.yaml", "graph to run")
+	planted := fs.String("planted", "", "plant the flawed first plan in <eval>/planted/<name>.json, to test replanning")
 	fs.Parse(args)
 	if fs.NArg() == 0 {
 		return errors.New("eval needs at least one eval folder, such as evals/wordfreq")
@@ -131,12 +136,19 @@ func runEvals(args []string) error {
 		return err
 	}
 
-	type job struct{ dir, name string }
+	type job struct{ dir, name, planted string }
 	var jobs []job
 	for _, dir := range fs.Args() {
 		dir = filepath.Clean(dir)
+		var plan []byte
+		if *planted != "" {
+			// Read it before any run starts, so a missing file costs nothing.
+			if plan, err = os.ReadFile(filepath.Join(dir, "planted", *planted+".json")); err != nil {
+				return err
+			}
+		}
 		for range *n {
-			jobs = append(jobs, job{dir, filepath.Base(dir)})
+			jobs = append(jobs, job{dir, filepath.Base(dir), string(plan)})
 		}
 	}
 	var (
@@ -153,7 +165,7 @@ func runEvals(args []string) error {
 			if limited.Load() {
 				return
 			}
-			r, err := evalOnce(store, *addr, root, j.dir, string(g))
+			r, err := evalOnce(store, *addr, root, j.dir, string(g), j.planted)
 			if r.Limited {
 				limited.Store(true)
 			}
@@ -162,7 +174,7 @@ func runEvals(args []string) error {
 				fmt.Fprintf(os.Stderr, "%s: %v\n", j.name, err)
 				r.At, r.Status, r.Reason, r.Pass = cmp.Or(r.At, time.Now()), "error", err.Error(), false
 			}
-			r.Eval, r.Graph, r.Standards = j.name, parsed.Name, hex.EncodeToString(sum[:8])
+			r.Eval, r.Graph, r.Standards, r.Planted = j.name, parsed.Name, hex.EncodeToString(sum[:8]), *planted
 			line, _ := json.Marshal(r)
 			mu.Lock()
 			defer mu.Unlock()
@@ -198,12 +210,12 @@ var (
 )
 
 // evalOnce starts one run, waits for it, and scores its product.
-func evalOnce(store *event.Store, addr, root, dir, g string) (evalResult, error) {
+func evalOnce(store *event.Store, addr, root, dir, g, planted string) (evalResult, error) {
 	spec, err := os.ReadFile(filepath.Join(dir, "spec.md"))
 	if err != nil {
 		return evalResult{}, err
 	}
-	id, err := startRun(addr, server.StartRequest{Graph: g, Executor: "claude", Spec: string(spec), AutoApprove: true})
+	id, err := startRun(addr, server.StartRequest{Graph: g, Executor: "claude", Spec: string(spec), AutoApprove: true, PlantedPlan: planted})
 	if err != nil {
 		return evalResult{}, err
 	}
@@ -235,6 +247,7 @@ func evalOnce(store *event.Store, addr, root, dir, g string) (evalResult, error)
 		ClaudeVersion: claude.Version(),
 	}
 	r.MaxParallel, r.MergeConflicts = parallelism(evs, graphOf(evs, st))
+	r.Replans = st.Replans
 	for _, n := range st.Graph.Nodes {
 		ns := st.Nodes[n.ID]
 		if n.Kind == graph.Agent {

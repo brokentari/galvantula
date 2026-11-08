@@ -35,6 +35,9 @@ type Claude struct {
 	Root  string
 	Rails guardrails.Guardrails
 	Spec  string
+	// PlantedPlan, if not empty, is the answer the first planner gives. An eval
+	// plants a flawed plan this way, to see whether the factory recovers.
+	PlantedPlan string
 	// Auth holds the credential the sandboxed agent uses:
 	// CLAUDE_CODE_OAUTH_TOKEN=... or ANTHROPIC_API_KEY=...
 	Auth string
@@ -110,6 +113,11 @@ func roleName(n graph.Node) string {
 }
 
 func (c Claude) agent(ctx context.Context, repo workspace.Repo, t Task, log func(string)) (Result, error) {
+	if t.Node.Kind == graph.Plan && t.Replan == nil && c.PlantedPlan != "" {
+		log("using the planted plan, not the planner's")
+		nodes, err := planReport(c, repo, t, c.PlantedPlan, log)
+		return Result{Nodes: nodes}, err
+	}
 	p, ok := plans[roleName(t.Node)]
 	if !ok {
 		return Result{}, fmt.Errorf("node %q has no role the executor knows", t.Node.ID)

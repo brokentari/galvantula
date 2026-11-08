@@ -1,21 +1,26 @@
 import { Background, Controls, Handle, Position, ReactFlow, type Edge, type Node, type NodeProps } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { useMemo } from "react";
-import type { GraphNode } from "./gen/events";
+import type { Graph, GraphNode } from "./gen/events";
 import { layout, type NodeView, type RunView } from "./state";
 
-type CardData = { node: GraphNode; view: NodeView; selected: boolean };
+// Marks say how a graph version differs from the one before it.
+export type Marks = Record<string, "added" | "removed" | "changed">;
+
+const noView: NodeView = { status: "pending", attempt: 0, taskFailures: 0, infraFailures: 0, costUSD: 0, logs: [] };
+
+type CardData = { node: GraphNode; view: NodeView; selected: boolean; mark?: string };
 
 function Card({ data }: NodeProps<Node<CardData>>) {
-  const { node, view, selected } = data;
+  const { node, view, selected, mark } = data;
   return (
-    <div className={`card kind-${node.kind} status-${view.status}${selected ? " selected" : ""}`}>
+    <div className={`card kind-${node.kind} status-${view.status}${selected ? " selected" : ""}${mark ? ` mark-${mark}` : ""}`}>
       <Handle type="target" position={Position.Left} />
       <div className="card-id">{node.id}</div>
       {node.title && <div className="card-title">{node.title}</div>}
       <div className="card-meta">
         <span className="dot" />
-        {node.kind} · {view.status}
+        {node.kind} · {mark === "removed" ? "replaced" : view.status}
         {view.attempt > 1 && ` · try ${view.attempt}`}
       </div>
       <Handle type="source" position={Position.Right} />
@@ -25,17 +30,17 @@ function Card({ data }: NodeProps<Node<CardData>>) {
 
 const nodeTypes = { card: Card };
 
-export function GraphView({ run, selected, onSelect }: { run: RunView; selected?: string; onSelect: (id: string) => void }) {
-  // The layout depends only on the graph, which changes only when a plan adds nodes.
-  const pos = useMemo(() => layout(run.graph), [run.graph]);
+export function GraphView({ run, graph, marks, selected, onSelect }: { run: RunView; graph: Graph; marks: Marks; selected?: string; onSelect: (id: string) => void }) {
+  // The layout depends only on the graph, which changes only when a plan adds or replaces nodes.
+  const pos = useMemo(() => layout(graph), [graph]);
   const { nodes, edges } = useMemo(() => {
-    const nodes: Node<CardData>[] = run.graph.nodes.map((n) => ({
+    const nodes: Node<CardData>[] = graph.nodes.map((n) => ({
       id: n.id,
       type: "card",
       position: pos.get(n.id) ?? { x: 0, y: 0 },
-      data: { node: n, view: run.nodes[n.id], selected: n.id === selected },
+      data: { node: n, view: run.nodes[n.id] ?? noView, selected: n.id === selected, mark: marks[n.id] },
     }));
-    const edges: Edge[] = run.graph.nodes.flatMap((n) =>
+    const edges: Edge[] = graph.nodes.flatMap((n) =>
       (n.deps ?? []).map((d) => ({
         id: `${d}->${n.id}`,
         source: d,
@@ -45,12 +50,12 @@ export function GraphView({ run, selected, onSelect }: { run: RunView; selected?
       })),
     );
     return { nodes, edges };
-  }, [run, pos, selected]);
+  }, [run, graph, marks, pos, selected]);
 
   return (
     <ReactFlow
       // Remount when the plan changes the graph, so the view fits the new shape.
-      key={`${run.id}:${run.graphVersion}`}
+      key={`${run.id}:${graph.nodes.length}:${Object.keys(marks).length}:${run.graphVersion}`}
       nodes={nodes}
       edges={edges}
       nodeTypes={nodeTypes}

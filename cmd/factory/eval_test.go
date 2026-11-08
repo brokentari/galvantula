@@ -16,6 +16,7 @@ import (
 
 	"github.com/brokentari/galvantula/internal/event"
 	"github.com/brokentari/galvantula/internal/graph"
+	"github.com/brokentari/galvantula/internal/plan"
 )
 
 // A run the eval loses still counts, as a failed run, so the pass rate
@@ -267,5 +268,67 @@ func TestParallelism(t *testing.T) {
 	}
 	if maxRunning, _ := parallelism(evs[:5], g); maxRunning != 1 {
 		t.Errorf("with only a started, parallelism = %d, want 1", maxRunning)
+	}
+}
+
+// A planted plan that the planner would refuse tells the eval nothing, so
+// each one must pass the plan rules for the eval's packages.
+func TestPlantedPlansAreValid(t *testing.T) {
+	packages := map[string][]string{"logq": {"cmd/logq", "internal/filter", "internal/parse", "internal/render"}}
+	files, _ := filepath.Glob(filepath.Join("..", "..", "evals", "*", "planted", "*.json"))
+	if len(files) == 0 {
+		t.Fatal("no planted plans")
+	}
+	for _, f := range files {
+		eval := filepath.Base(filepath.Dir(filepath.Dir(f)))
+		data, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out, err := plan.Parse(string(data))
+		if err == nil {
+			err = plan.Validate(out, packages[eval])
+		}
+		if err == nil {
+			_, err = graph.Graph{Name: "g", Nodes: []graph.Node{{ID: "p", Kind: graph.Plan}, {ID: "s", Kind: graph.Slot, FilledBy: "p", Deps: []string{"p"}}}}.Fill("s", plan.Nodes(out))
+		}
+		if err != nil {
+			t.Errorf("%s: %v", f, err)
+		}
+	}
+}
+
+// -planted sends the file's plan with each run, and a missing file stops the eval before any run starts.
+func TestPlantedPlanReachesTheServer(t *testing.T) {
+	var bodies atomic.Pointer[string]
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var buf bytes.Buffer
+		buf.ReadFrom(r.Body)
+		s := buf.String()
+		bodies.Store(&s)
+		http.Error(w, "no", http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+	repo, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	inTempRepo(t, repo)
+	args := func(name string) []string {
+		return []string{"-server", srv.URL, "-db", "f.db", "-runs", "runs", "-n", "1", "-planted", name,
+			"-graph", filepath.Join(repo, "graphs", "phase1.yaml"), filepath.Join(repo, "evals", "logq")}
+	}
+	if err := runEvals(args("nope")); err == nil || bodies.Load() != nil {
+		t.Fatalf("a missing planted plan: error %v, run started %t", err, bodies.Load() != nil)
+	}
+	if err := runEvals(args("cli-first")); err != nil {
+		t.Fatal(err)
+	}
+	if body := bodies.Load(); body == nil || !strings.Contains(*body, `\"id\": \"cli\"`) {
+		t.Errorf("the request did not carry the plan: %v", body)
+	}
+	data, _ := os.ReadFile(filepath.Join("evals", "results", time.Now().Format(time.DateOnly)+".jsonl"))
+	if !strings.Contains(string(data), `"planted":"cli-first"`) {
+		t.Errorf("the result does not name the planted plan:\n%s", data)
 	}
 }

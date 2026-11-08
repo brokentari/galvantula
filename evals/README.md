@@ -37,6 +37,25 @@ To change what an eval checks, edit `spec.md` and run evalgen again. Do not
 edit `hidden/` or `reference/` by hand. If `assumptions.md` lists a gap that
 matters, close it in the spec.
 
+## Plant a planner mistake
+
+`factory eval -planted <name>` tests replanning. It replaces the planner's
+first answer with `<eval>/planted/<name>.json`, which has the same shape as the
+planner's answer. The file must pass the plan rules, so the plan is wrong in a
+way the rules cannot see: a task that needs a package that its deps do not
+build. The task fails its check, and the run must recover with a replan and
+still pass the hidden tests. Each result records `planted` and `replans`.
+Only the server reads the file. No agent sees it.
+
+| planted plan | the mistake |
+|---|---|
+| `logq/cli-first` | `cmd/logq` has no deps, so it starts before the packages it calls |
+| `logq/filter-before-parse` | `internal/filter` has no dep on `internal/parse`, which it may need |
+
+The second plan fails only if the architect's contract makes the filter use
+the parser's types, so that run may pass with no replan. Read `replans` before
+you read the pass rate.
+
 ## Run the hidden tests
 
 Against a product the factory built:

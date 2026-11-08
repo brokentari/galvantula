@@ -1,0 +1,6 @@
+{"tasks": [
+  {"id": "parse", "title": "the line parser", "scope": ["internal/parse"], "deps": []},
+  {"id": "filter", "title": "the filter expressions", "scope": ["internal/filter"], "deps": ["parse"]},
+  {"id": "render", "title": "the output formats", "scope": ["internal/render"], "deps": ["parse"]},
+  {"id": "cli", "title": "the command that wires them together", "scope": ["cmd/logq"], "deps": []}
+]}
