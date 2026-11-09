@@ -57,8 +57,10 @@ eval says nothing. Two plans did not. `filter-before-parse` never failed in
 three runs, because it depends on the architect's choice of types.
 `cli-after-parse` gave `cmd/logq` a dep on the parser only. It failed, but a
 retry passed in both runs, because the other packages had merged by then, so
-no replan happened. Only `cli-first` replanned, in all three runs. Read
-`replans` before you read the pass rate.
+no replan happened. `cli-first` is the best of the three: it replanned in 5 of
+6 runs, and the sixth passed on retries alone. All six passed the hidden
+tests. Read `replans` before you read the pass rate, and expect some runs
+to pass with none.
 
 ## Run the hidden tests
 
