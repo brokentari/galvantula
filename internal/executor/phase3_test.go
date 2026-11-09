@@ -177,6 +177,17 @@ func TestScopeViolations(t *testing.T) {
 	}
 }
 
+// A task with "." in its scope may write README.md at the root, and its check does not try to test the root.
+func TestRootScopeAllowsRootFiles(t *testing.T) {
+	n := graph.Node{ID: "a", Scope: []string{"pkga", "."}}
+	if out := outsideScope(n, []string{"README.md", "pkga/a.go", ".factory/notes/a.md", "pkgb/b.go"}); !slices.Equal(out, []string{"pkgb/b.go"}) {
+		t.Errorf("outside scope: %v", out)
+	}
+	if pkgs, _ := testTargets(t.TempDir(), n, 1); !slices.Equal(pkgs, []string{"./pkga"}) {
+		t.Errorf("test targets: %v", pkgs)
+	}
+}
+
 func TestReplanBriefNamesTheFailureAndTheFreePackages(t *testing.T) {
 	r := &Replan{Reason: "the check failed: import cycle", Kept: []Kept{{ID: "parse", Scope: []string{"internal/parse"}}}, Retired: []string{"render", "cli"}}
 	pkgs := replanPackages([]string{"cmd/x", "internal/parse", "internal/render"}, r)

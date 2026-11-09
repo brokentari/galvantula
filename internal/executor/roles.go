@@ -79,6 +79,7 @@ Write these files:
 Rules for the tests:
 - A builder will implement the stubs, and may not change your tests. Test what the spec says, and nothing it leaves open.
 - Every test must fail on the stubs, except a test of a case where doing nothing is correct. The check runs the tests on your stubs and requires at least %d tests, with at least %d%% failing.
+- A second agent will implement your stubs from spec.md and your tests. If its code cannot pass a test, the check fails. Check every expected value against spec.md, and work each by hand: count, sort and trim as the spec says.
 - Do not change or delete a file that was here when you started: AGENTS.md, CLAUDE.md, spec.md, go.mod and .factory/.
 ` + rules
 

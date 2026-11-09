@@ -51,6 +51,14 @@ go run ./cmd/factory serve
 go run ./cmd/factory start -spec evals/wordfreq/spec.md graphs/phase1.yaml
 ```
 
+On macOS, or any host without `bwrap`, run the server in a Linux container
+instead. Put the token from `claude setup-token` in a file named `claude-token`
+(git ignores it), then run `scripts/docker-factory.sh` in place of `go run
+./cmd/factory serve`. `docker/Dockerfile` has bwrap, Go and `claude`. The
+script gives the container the three Docker security options that bwrap
+needs and publishes port 7070 to your machine only. Run `factory start` from
+the host as usual.
+
 `graphs/phase2.yaml` is the full pipeline: an architect writes the interfaces,
 the acceptance tests and `CONTRACT.md`; you approve the contract at a gate
 (the log shows it, and the file is in the run's repo); an implementer fills in

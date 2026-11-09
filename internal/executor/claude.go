@@ -38,6 +38,9 @@ type Claude struct {
 	// PlantedPlan, if not empty, is the answer the first planner gives. An eval
 	// plants a flawed plan this way, to see whether the factory recovers.
 	PlantedPlan string
+	// SkipOracle turns off the trial build of the architect's tests. Tests that
+	// script a fake agent set it, so that they need not script the oracle too.
+	SkipOracle bool
 	// Auth holds the credential the sandboxed agent uses:
 	// CLAUDE_CODE_OAUTH_TOKEN=... or ANTHROPIC_API_KEY=...
 	Auth string
@@ -254,6 +257,13 @@ func (c Claude) agent(ctx context.Context, repo workspace.Repo, t Task, log func
 	log("check")
 	if err := c.check(ctx, repo, wt, t.Node, p, log); err != nil {
 		return spent, fmt.Errorf("check failed:\n%w", err)
+	}
+	if p.red && !c.SkipOracle {
+		cost, err := c.oracle(ctx, wt, log)
+		spent.CostUSD += cost
+		if err != nil {
+			return spent, fmt.Errorf("check failed:\n%w", err)
+		}
 	}
 	if _, err := repo.CommitAll(wt, fmt.Sprintf("%s: attempt %d", t.Node.ID, t.Attempt)); err != nil {
 		return spent, &InfraError{Err: err}

@@ -71,13 +71,18 @@ func Validate(out Output, packages []string) error {
 			switch {
 			case dir != path.Clean(dir) || path.IsAbs(dir) || strings.HasPrefix(dir, "..") || strings.HasPrefix(dir, ".factory"):
 				errs = append(errs, fmt.Errorf("task %q: scope %q must be a clean relative path inside the product", t.ID, dir))
-			case !slices.Contains(packages, dir):
+			case dir != "." && !slices.Contains(packages, dir): // "." is the repo root, for files that are in no package
 				errs = append(errs, fmt.Errorf("task %q: scope %q is not a package of the contract (the packages are: %s)", t.ID, dir, strings.Join(packages, ", ")))
 			case owner[dir] != "":
 				errs = append(errs, fmt.Errorf("package %q is in the scope of both %q and %q; each package needs one owner", dir, owner[dir], t.ID))
 			default:
 				owner[dir] = t.ID
 			}
+		}
+	}
+	for _, t := range out.Tasks {
+		if slices.Equal(t.Scope, []string{"."}) {
+			errs = append(errs, fmt.Errorf("task %q owns only the repo root; give %q to a task that also has a package", t.ID, "."))
 		}
 	}
 	for _, p := range packages {

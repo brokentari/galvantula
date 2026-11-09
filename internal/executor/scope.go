@@ -37,6 +37,11 @@ func testTargets(wt string, n graph.Node, fallbackMin int) (pkgs []string, min i
 		return []string{"./..."}, fallbackMin
 	}
 	for _, dir := range n.Scope {
+		if dir == "." { // the root has files such as README.md, and no package unless it has Go files
+			if files, _ := filepath.Glob(filepath.Join(wt, "*.go")); len(files) == 0 {
+				continue
+			}
+		}
 		pkgs = append(pkgs, "./"+dir)
 		files, _ := filepath.Glob(filepath.Join(wt, filepath.FromSlash(dir), "*_test.go"))
 		if len(files) > 0 {
@@ -70,6 +75,7 @@ const plannerBrief = `Plan how to build the program in this directory in paralle
 Split the work into tasks, one per builder. Rules:
 - Each task has an id (lowercase letters, digits and hyphens), a short title, a scope, and deps.
 - The scope lists package directories, such as "internal/store". Every package below must be in the scope of exactly one task. Do not add a package that is not in the list.
+- The scope may also hold ".", the repo root. A builder may write a file in the root only if its scope has ".". If spec.md asks for a file in the root, such as README.md, or a test reads one, give "." to exactly one task. Choose the task whose package that file describes or whose test reads it, so that its check can pass. Never make a task for "." alone.
 - deps lists the ids of tasks that must finish first. A builder starts only after its deps are merged. Give a task a dep only if its tests need the other package to work for real, or if it must call code that the other task writes. Packages with no such need get no dep, so that builders run at the same time. A task may depend on tasks only, never on itself.
 - At most %d tasks. At most %d tasks in the longest chain of deps. Keep the plan small: one task for a package that is small, and do not split a package.
 - Do not use the ids standards, architect, plan, tasks, review, fix or verify, or an id that starts with approve- or replan-. Other nodes have them.
@@ -90,7 +96,7 @@ Why the task failed:
 %s
 
 The packages below are the ones to plan again. On main they are still stubs. Use the same rules as before, with these changes:
-- Give each package below to exactly one task, and no other package. The kept tasks own the others.
+- Give each package below to exactly one task, and no other package. The kept tasks own the others. Give "." (the repo root) to a new task only if no kept task owns it.
 - Do not repeat the failure. Change the scope, the split or the deps so that the failure cannot happen again.
 - A task may depend on the other new tasks, and on the kept tasks below. A dependency on a kept task makes the new task wait for its merge. Use one when the new task needs that code to work.
 - The kept tasks, with the packages each owns:

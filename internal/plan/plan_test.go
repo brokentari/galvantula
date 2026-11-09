@@ -44,6 +44,11 @@ func TestValidate(t *testing.T) {
 		t.Fatalf("a good plan was refused: %v", err)
 	}
 
+	withRoot := Output{Tasks: []Task{task("a", nil, "cmd/x", "internal/parse", "."), task("b", nil, "internal/render")}}
+	if err := Validate(withRoot, packages); err != nil {
+		t.Fatalf("a plan that gives the root to a task with packages was refused: %v", err)
+	}
+
 	tests := []struct {
 		name string
 		out  Output
@@ -57,6 +62,8 @@ func TestValidate(t *testing.T) {
 		{"an escaping scope", Output{Tasks: []Task{task("a", nil, "../etc")}}, "clean relative path"},
 		{"the factory folder", Output{Tasks: []Task{task("a", nil, ".factory/notes")}}, "clean relative path"},
 		{"a runtime id", Output{Tasks: []Task{task("replan-1", nil, "cmd/x", "internal/parse", "internal/render")}}, "for the runtime"},
+		{"the root alone", Output{Tasks: []Task{task("a", nil, "cmd/x", "internal/parse", "internal/render"), task("b", nil, ".")}}, "only the repo root"},
+		{"the root twice", Output{Tasks: []Task{task("a", nil, "cmd/x", "internal/parse", "."), task("b", nil, "internal/render", ".")}}, "both"},
 		{"no scope", Output{Tasks: []Task{task("a", nil)}}, "no scope"},
 		{"too deep", Output{Tasks: []Task{
 			task("a", nil, "cmd/x"), task("b", []string{"a"}, "internal/parse"), task("c", []string{"b"}, "internal/render"),

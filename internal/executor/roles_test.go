@@ -112,6 +112,39 @@ func TestArchitectMergesAContractThatFailsOnItsStubs(t *testing.T) {
 	}
 }
 
+// A second agent implements the stubs. The contract merges only if its tests pass.
+func TestOracleTrialBuildOfTheTests(t *testing.T) {
+	tests := []struct {
+		name, oracle, wantErr string
+	}{
+		{"the tests pass", writeFile("main.go", doneMain), ""},
+		{"a test cannot pass", writeFile("DISPUTES.md", "TestCount3 contradicts spec.md\n"), "TestCount3 contradicts spec.md"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c, _ := setUpRun(t)
+			c.SkipOracle = false
+			fakeAgents(t, map[string]string{"architect": architectWork(6), "oracle": tt.oracle})
+			res, log, err := runNode(t, c, "architect", "architect")
+			if res.CostUSD != 0.5 {
+				t.Errorf("cost %v, want 0.5: the oracle's cost counts", res.CostUSD)
+			}
+			if tt.wantErr == "" {
+				if err != nil || !strings.Contains(log, "merged into main") {
+					t.Fatalf("got %v, log:\n%s", err, log)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), "could not make your tests pass") || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("got %v, want a refusal that names %q", err, tt.wantErr)
+			}
+			if IsInfra(err) || strings.Contains(log, "merged into main") {
+				t.Errorf("the architect must retry, and nothing may merge: %v\n%s", err, log)
+			}
+		})
+	}
+}
+
 func TestArchitectCheckFailures(t *testing.T) {
 	panicking := writeFile("main.go", stubMain+"\nfunc init() { panic(\"stub\") }\n") + writeFile("main_test.go", testsOn(6)) + writeFile("CONTRACT.md", contract)
 	skipping := writeFile("main.go", stubMain) + writeFile("main_test.go", testsOn(6)+"\nfunc TestSkipped(t *testing.T) {\n\tt.Skip(\"later\")\n}\n") + writeFile("CONTRACT.md", contract)

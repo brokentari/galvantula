@@ -71,7 +71,7 @@ func setUpRun(t *testing.T) (Claude, func(Task) (Result, error)) {
 	rails.Go.Version = "1.27"
 	rails.Budget.NodeUSD, rails.Budget.RunUSD, rails.Budget.NodeMinutes = 1, 1, 1
 	rails.Models.Implementer = guardrails.Role{Model: "m", Effort: "low"}
-	c := Claude{Root: t.TempDir(), Rails: rails, Spec: "Print 0, 1 and 2.\n", Auth: "CLAUDE_CODE_OAUTH_TOKEN=test"}
+	c := Claude{Root: t.TempDir(), Rails: rails, Spec: "Print 0, 1 and 2.\n", Auth: "CLAUDE_CODE_OAUTH_TOKEN=test", SkipOracle: true}
 	run := func(task Task) (Result, error) {
 		task.Run = "r"
 		return c.Run(t.Context(), task, func(string) {})
