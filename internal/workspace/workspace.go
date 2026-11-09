@@ -3,6 +3,7 @@
 package workspace
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"os"
@@ -143,12 +144,13 @@ func (r Repo) Merge(node string) error {
 	return nil
 }
 
-// git runs git in dir on the host. An agent can write anything in its
+// git runs git in dir on the host. Commits get the name and email in
+// FACTORY_GIT_NAME and FACTORY_GIT_EMAIL, or the factory's own if they are unset. An agent can write anything in its
 // worktree, including the .git link, so for a worktree git is told where
 // the real repo is and never reads a .git it finds there. It runs no hooks
 // and no fsmonitor command.
 func (r Repo) git(dir string, args ...string) (string, error) {
-	cmd := exec.Command("git", append([]string{"-c", "user.name=galvantula", "-c", "user.email=factory@localhost",
+	cmd := exec.Command("git", append([]string{"-c", "user.name=" + cmp.Or(os.Getenv("FACTORY_GIT_NAME"), "galvantula"), "-c", "user.email=" + cmp.Or(os.Getenv("FACTORY_GIT_EMAIL"), "factory@localhost"),
 		"-c", "core.hooksPath=" + os.DevNull, "-c", "core.fsmonitor=false", "-c", "commit.gpgsign=false"}, args...)...)
 	cmd.Dir = dir
 	if filepath.Clean(dir) != filepath.Clean(r.Dir) {

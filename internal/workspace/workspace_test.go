@@ -158,3 +158,20 @@ func TestRewindRemovesWorkAfterACommit(t *testing.T) {
 		t.Error("Rewind found a commit that does not exist")
 	}
 }
+
+// A run's commits carry the identity in the environment, so a person's public identity is the one on record.
+func TestCommitsUseTheIdentityInTheEnvironment(t *testing.T) {
+	t.Setenv("FACTORY_GIT_NAME", "someone")
+	t.Setenv("FACTORY_GIT_EMAIL", "someone@example.com")
+	r, err := Open(filepath.Join(t.TempDir(), "repo"))
+	must(t, err)
+	must(t, os.WriteFile(filepath.Join(r.Dir, "f"), []byte("x"), 0o644))
+	if _, err := r.CommitAll(r.Dir, "c"); err != nil {
+		t.Fatal(err)
+	}
+	out, err := r.git(r.Dir, "log", "--format=%an <%ae> %cn <%ce>")
+	must(t, err)
+	if want := "someone <someone@example.com> someone <someone@example.com>"; !strings.Contains(out, want) {
+		t.Errorf("log %q lacks %q", out, want)
+	}
+}
