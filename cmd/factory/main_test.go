@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/brokentari/galvantula/graphs"
 	"github.com/brokentari/galvantula/internal/event"
 	"github.com/brokentari/galvantula/internal/graph"
 )
@@ -89,5 +90,28 @@ func TestFactoryCommit(t *testing.T) {
 	write("b.go")
 	if got := factoryCommit(); got != clean+"-dirty" {
 		t.Errorf("with another new file: got %q, want %q", got, clean+"-dirty")
+	}
+}
+
+// The MCP server starts runs from the graphs built into the program, so
+// each one must be valid and phase4, its default, must be there.
+func TestBuiltInGraphsAreValid(t *testing.T) {
+	files, err := graphs.FS.ReadDir(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, f := range files {
+		data, err := graphs.FS.ReadFile(f.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := graph.Parse(data); err != nil {
+			t.Errorf("%s: %v", f.Name(), err)
+		}
+		found = found || f.Name() == "phase4.yaml"
+	}
+	if !found {
+		t.Error("phase4.yaml is not built in")
 	}
 }

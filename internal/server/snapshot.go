@@ -60,7 +60,7 @@ func snapshot(evs []event.Event) (Snapshot, error) {
 		ns := st.Nodes[n.ID]
 		snap.Nodes = append(snap.Nodes, NodeSnapshot{ID: n.ID, Title: n.Title, Kind: string(n.Kind), Status: ns.Status, Attempt: ns.Attempt, LastError: ns.LastError})
 		if ns.Status == event.Waiting {
-			snap.Gates = append(snap.Gates, GateSnapshot{Node: n.ID, Title: n.Title, Context: logLines(evs, n.Deps, maxGateContext)})
+			snap.Gates = append(snap.Gates, GateSnapshot{Node: n.ID, Title: n.Title, Context: latestLines(evs, n.Deps, maxGateContext)})
 		}
 	}
 	return snap, nil
@@ -82,6 +82,28 @@ func logLines(evs []event.Event, nodes []string, n int) []string {
 			d.Line = e.Node + ": " + d.Line
 		}
 		lines = append(lines, d.Line)
+	}
+	return lines[max(len(lines)-n, 0):]
+}
+
+// latestLines is logLines for the last attempt of each node only. A gate shows
+// what the nodes before it just did, and after a rejection the earlier
+// attempt's lines hold the contract that the person sent back.
+func latestLines(evs []event.Event, nodes []string, n int) []string {
+	lastStart := map[string]int{} // node -> index of its last node_started event
+	for i, e := range evs {
+		if e.Type == event.NodeStarted {
+			lastStart[e.Node] = i
+		}
+	}
+	var lines []string
+	for i, e := range evs {
+		if e.Type != event.NodeLog || !slices.Contains(nodes, e.Node) || i < lastStart[e.Node] {
+			continue
+		}
+		if d, err := e.Decode[event.NodeLogData](); err == nil {
+			lines = append(lines, d.Line)
+		}
 	}
 	return lines[max(len(lines)-n, 0):]
 }

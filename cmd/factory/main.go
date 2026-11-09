@@ -3,7 +3,7 @@
 //	factory serve    [-addr localhost:7070] [-db factory.db] [-runs runs] [-guardrails guardrails.yaml] [-ui ui/dist] [-workers 3]
 //	factory start    [-server http://localhost:7070] (-fake script.yaml | -spec spec.md) graph.yaml
 //	factory eval     [-server http://localhost:7070] [-db factory.db] [-runs runs] [-n 10] [-parallel 1] [-graph graphs/phase1.yaml] evals/<name>...
-//	factory mcp      [-server http://localhost:7070] [-graphs graphs]
+//	factory mcp      [-server http://localhost:7070] [-graphs folder]
 //	factory validate graph.yaml...
 //	factory standards [-guardrails guardrails.yaml] [-o AGENTS.md]
 package main
@@ -16,6 +16,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	iofs "io/fs"
 	"log/slog"
 	"net"
 	"net/http"
@@ -27,6 +28,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/brokentari/galvantula/graphs"
 	"github.com/brokentari/galvantula/internal/event"
 	"github.com/brokentari/galvantula/internal/executor"
 	"github.com/brokentari/galvantula/internal/graph"
@@ -41,7 +43,7 @@ const usage = `usage:
   factory serve    [-addr localhost:7070] [-db factory.db] [-runs runs] [-guardrails guardrails.yaml] [-ui ui/dist] [-workers 3]
   factory start    [-server http://localhost:7070] (-fake script.yaml | -spec spec.md) graph.yaml
   factory eval     [-server http://localhost:7070] [-db factory.db] [-runs runs] [-n 10] [-parallel 1] [-graph graphs/phase1.yaml] evals/<name>...
-  factory mcp      [-server http://localhost:7070] [-graphs graphs]
+  factory mcp      [-server http://localhost:7070] [-graphs folder]
   factory validate graph.yaml...
   factory standards [-guardrails guardrails.yaml] [-o AGENTS.md]`
 
@@ -249,11 +251,15 @@ func startRun(addr string, req server.StartRequest) (string, error) {
 func serveMCP(args []string) error {
 	fs := flag.NewFlagSet("mcp", flag.ExitOnError)
 	addr := fs.String("server", "http://localhost:7070", "factory server")
-	graphs := fs.String("graphs", "graphs", "folder of graphs that factory_start may run")
+	graphsDir := fs.String("graphs", "", "folder of graphs that factory_start may run; empty means the graphs built into this program")
 	fs.Parse(args)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	return mcp.Server{API: *addr, GraphsDir: *graphs}.Serve(ctx, os.Stdin, os.Stdout)
+	var files iofs.FS = graphs.FS
+	if *graphsDir != "" {
+		files = os.DirFS(*graphsDir)
+	}
+	return mcp.Server{API: *addr, Graphs: files}.Serve(ctx, os.Stdin, os.Stdout)
 }
 
 func validate(paths []string) error {

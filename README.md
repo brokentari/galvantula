@@ -93,15 +93,22 @@ API, so Claude Code and the UI show the same runs. Its tools:
 | `factory_logs` | shows the last log lines of a node, or of every node |
 | `factory_approve` | approves or rejects a gate, with notes |
 
-Start the factory server, then start Claude Code from this repo with the plugin:
+Install the program once. The plugin runs `factory mcp` from your `PATH`, and
+the graphs are built into it:
 
 ```
-CLAUDE_CODE_OAUTH_TOKEN=... go run ./cmd/factory serve
-claude --plugin-dir ./plugin
+go install ./cmd/factory
 ```
 
-Then type `/factory` and describe the program. The plugin's server starts with
-`go run`, from the repo that holds the plugin, so keep the plugin in this repo.
+Start the server, then start Claude Code in any folder with the plugin:
+
+```
+CLAUDE_CODE_OAUTH_TOKEN=... factory serve
+claude --plugin-dir /path/to/galvantula/plugin
+```
+
+Then type `/factory` and describe the program. `factory serve` still needs to
+run from this repo, where `guardrails.yaml` and `ui/dist` are.
 
 Each run's product is a git repo in `runs/<run>/repo`. The agent works in
 `runs/<run>/nodes/<node>`; the runtime commits and merges its work after the

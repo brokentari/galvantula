@@ -6,10 +6,9 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
+	"testing/fstest"
 )
 
 // fakeFactory answers the API calls the tools make, and keeps what it was sent.
@@ -116,9 +115,7 @@ func TestToolsTalkToTheFactory(t *testing.T) {
 	f := &fakeFactory{posts: map[string]string{}}
 	srv := httptest.NewServer(f)
 	defer srv.Close()
-	graphs := t.TempDir()
-	os.WriteFile(filepath.Join(graphs, "phase4.yaml"), []byte("name: phase4\n"), 0o644)
-	s := Server{API: srv.URL, GraphsDir: graphs}
+	s := Server{API: srv.URL, Graphs: fstest.MapFS{"phase4.yaml": {Data: []byte("name: phase4\n")}}}
 
 	got := talk(t, s,
 		call(1, "factory_status", `{}`),
@@ -154,7 +151,7 @@ func TestToolErrorsReachTheModel(t *testing.T) {
 	f := &fakeFactory{posts: map[string]string{}}
 	srv := httptest.NewServer(f)
 	defer srv.Close()
-	s := Server{API: srv.URL, GraphsDir: t.TempDir()}
+	s := Server{API: srv.URL, Graphs: fstest.MapFS{}}
 	for name, c := range map[string]struct{ call, want string }{
 		"graph path":     {call(1, "factory_start", `{"spec":"x","graph":"../secret"}`), "must be lower case"},
 		"missing graph":  {call(1, "factory_start", `{"spec":"x","graph":"nope"}`), `no graph "nope"`},

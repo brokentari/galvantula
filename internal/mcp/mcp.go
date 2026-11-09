@@ -14,10 +14,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/url"
-	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -27,8 +26,8 @@ import (
 type Server struct {
 	// API is the factory server's address, such as http://localhost:7070.
 	API string
-	// GraphsDir holds the graph files that factory_start may name.
-	GraphsDir string
+	// Graphs holds the graph files that factory_start may name, as name.yaml.
+	Graphs fs.FS
 	// HTTP is the client for the API. Nil means a client with a 30 second timeout.
 	HTTP *http.Client
 }
@@ -214,9 +213,9 @@ func (s Server) start(ctx context.Context, raw jsontext.Value) (string, error) {
 	if !graphName.MatchString(a.Graph) { // the name becomes a file name
 		return "", fmt.Errorf("graph %q must be lower case letters, digits and hyphens", a.Graph)
 	}
-	g, err := os.ReadFile(filepath.Join(s.GraphsDir, a.Graph+".yaml"))
+	g, err := fs.ReadFile(s.Graphs, a.Graph+".yaml")
 	if err != nil {
-		return "", fmt.Errorf("no graph %q in %s", a.Graph, s.GraphsDir)
+		return "", fmt.Errorf("no graph %q", a.Graph)
 	}
 	var out struct {
 		ID string `json:"id"`

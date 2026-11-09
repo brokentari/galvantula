@@ -229,3 +229,20 @@ func TestStateAndLogs(t *testing.T) {
 		t.Errorf("unknown run: %d, want 404", code)
 	}
 }
+
+// After a gate sends work back, its context shows the new attempt only.
+func TestGateContextIsTheLatestAttempt(t *testing.T) {
+	line := func(node, text string) event.Event {
+		return event.New("r", event.NodeLog, node, 1, event.NodeLogData{Line: text})
+	}
+	evs := []event.Event{
+		event.New("r", event.NodeStarted, "a", 1, nil), line("a", "old contract"),
+		event.New("r", event.NodeStarted, "a", 2, nil), line("a", "new contract"), line("other", "not a dependency"),
+	}
+	if got := latestLines(evs, []string{"a"}, 10); strings.Join(got, "|") != "new contract" {
+		t.Errorf("context %v, want only the second attempt", got)
+	}
+	if got := logLines(evs, []string{"a"}, 10); len(got) != 2 {
+		t.Errorf("the logs endpoint must keep every attempt: %v", got)
+	}
+}
