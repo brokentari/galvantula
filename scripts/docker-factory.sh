@@ -8,8 +8,8 @@ cd "$(dirname "$0")/.."
 CLAUDE_CODE_OAUTH_TOKEN=$(tr -d '\n' < claude-token)
 export CLAUDE_CODE_OAUTH_TOKEN
 # Run commits carry the identity of this repo's git config.
-FACTORY_GIT_NAME=$(git config user.name)
-FACTORY_GIT_EMAIL=$(git config user.email)
+FACTORY_GIT_NAME=$(git config user.name || true)
+FACTORY_GIT_EMAIL=$(git config user.email || true)
 export FACTORY_GIT_NAME FACTORY_GIT_EMAIL
 docker build -q -t galvantula-factory docker >/dev/null
 # bwrap needs user namespaces (seccomp, apparmor) and a fresh /proc (systempaths); Docker blocks all three by default.

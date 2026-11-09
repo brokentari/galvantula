@@ -1,48 +1,67 @@
 # rotom: assumptions in the hidden tests
 
-The tests run the built `rotom` binary only. They start it with `--addr 127.0.0.1:0`, read the ready line, connect over TCP and compare raw RESP bytes. Each item below names a place where the spec is unclear, what a reasonable builder might do, and how the tests treat it.
+The tests start the built `rotom` with `--addr 127.0.0.1:0` and talk to it over TCP. The list below names each place where the spec is unclear, what a reasonable builder might do, and how the tests treat it.
 
-## Server and flags
+## Not observable from outside the binary
 
-- **Default address.** The spec gives `127.0.0.1:6379` as the default. Port 6379 can be in use on the test machine, so the tests do not check the default.
-- **Flag form.** The tests pass `--addr` and the address as two arguments. The Go `flag` package accepts this form, and so does `--addr=VALUE`.
-- **Ready line.** The tests require the first stdout line to be exactly `ready 127.0.0.1:PORT`, with a port that is not 0, and they connect to that address. The tests do not check stdout after the ready line.
-- **Listen failure.** The tests take a port with their own listener and start the server on it. They require exit status 1, empty stdout and a stderr that is not empty. The spec does not give the message, so the tests do not check the words.
-- **Bad flag.** The tests use `--bogus` and a bare `--addr` with no value. They require exit status 2 and empty stdout. They do not check stderr.
-- **Shutdown.** For SIGINT and SIGTERM, the tests connect one client, send `PING`, and then send the signal. They require exit status 0 within 10 seconds and the client connection closed. A server that waits for idle clients to leave fails. The tests do not check "stops accepting" separately: after the process exits, another test's server can get the same port, and the check would be unreliable.
-- **Data races.** A black-box test cannot see a data race, and evalkit builds without `-race`. The tests run 10 clients that each send `INCR` 300 times on one key and then check the total, which catches lost updates.
-- **Package layout, README and clock.** The four packages, the README and the clock that the store receives are not visible through the binary. The tests do not check them.
-- **Background deletion of expired keys.** Memory use cannot be measured in a portable way, so the tests do not check it. The tests only check that expired keys act as missing.
+- **Package layout, `README.md`, the store's clock, background deletion of expired keys, no data race.** The tests cannot see these through the binary, so they do not check them. The tests build without `-race`. Many clients write the same key at the same time, and the INCR total must be exact.
+
+## Server
+
+- **Default address.** If `127.0.0.1:6379` is free, the test starts the server with no flags and wants `ready 127.0.0.1:6379`. If another program holds the port, the server cannot listen, so the test wants exit 1, empty stdout and an error on stderr.
+- **Listen failure.** The test holds a port and starts the server on it. It wants exit 1, empty stdout and a non-empty stderr. It does not check the error text.
+- **Bad flags.** An unknown flag (`--no-such-flag`, `-x 1`) and `--addr` with no value must exit 2. The tests do not check stderr. A bad `--addr` value such as `nonsense` could be a bad flag (2) or a listen failure (1), so the tests do not use one.
+- **Ready line.** Stdout must be exactly `ready 127.0.0.1:PORT\n` while the server runs, with a non-zero port. The tests do not check stdout after shutdown.
+- **Signals.** After SIGINT or SIGTERM, the server must close an active and an idle connection and exit 0 within 10 s. The tests do not check commands in flight at that time.
+- **Concurrency.** 50 clients run at the same time. Also, a client that sent half a command must not block another client.
 
 ## Protocol
 
-- **Protocol error text.** The tests require a reply that starts with `-ERR Protocol error: ` and has a reason after it. Any reason text passes. The server must then close the connection without sending anything more.
-- **Malformed input that the tests use.** The tests use only cases that the spec names: a bad array length (`*x`), a bad bulk length (`$x`), a bulk length of 536870913 (one byte above 512 MiB), bulk data that `\r\n` does not follow, and a malformed request after a good pipelined `PING`. In the last case, the `PONG` must come before the error.
-- **Malformed input that the tests do not use.** These cases are open: an array header that ends in a bare `\n`, negative lengths such as `*-1` or `$-1`, `*0`, array items that are not bulk strings, and inline lines that start with `$`.
-- **Exactly 512 MiB.** The spec allows a bulk string of exactly 512 MiB. Sending one is too slow for a test, so the tests do not check this limit from below.
-- **Request that ends early.** The tests send part of a request and then close their write side (TCP half-close). They require no reply bytes and a closed connection. A later `GET` on another connection must show that the partial `SET` had no effect. An inline line with no `\n` at the end also counts as a request that ends early. A builder who uses `bufio.Scanner` runs the last unended line and fails this test. The tests treat that as a spec violation, because the spec says that an inline command ends with `\r\n` or `\n`.
-- **Inline word splitting.** The tests use one space between words. Runs of spaces, tabs and quotes are open. A line of only spaces is open too: the tests use only empty lines as blank lines.
-- **Errors that are not protocol errors.** The tests expect the connection to stay open after an unknown-command, wrong-number, integer or syntax error, because the spec closes the connection only for a malformed request.
-- **Exact error text.** The spec gives the text of the unknown-command, wrong-number, integer and syntax errors, so the tests compare the whole reply. Real Redis appends `, with args beginning with: ...` to the unknown-command error. That suffix fails the tests.
+- **Inline words.** The tests separate words with one space only. Several spaces, tabs, quotes and lines of only spaces are left open.
+- **Blank inline lines.** Only empty lines (`\r\n` or `\n`) are used. The tests check that these get no reply.
+- **Unterminated last line.** An inline command with no `\r\n` or `\n` before the client closes is a request that ended early. It must get no reply.
+- **After an early end.** The client half-closes its side. The server may close the connection or stay silent, but it must not send more bytes.
+- **Protocol errors.** The reply must start `-ERR Protocol error: ` and have a non-empty reason, and then the server must close the connection. The tests do not check the reason text. The tested cases:
+  - a bad array length (`*x`) or bulk length (`$x`);
+  - a bulk length of 512 MiB + 1;
+  - bulk data that is not followed by `\r\n`;
+  - an array element that is not a bulk string (`:1`);
+  - a bad request after a good one in the same write. The good one must still get its reply.
 
-## Commands
+  Redis 7 does not check the two bytes after bulk data. The spec says a missing `\r\n` is malformed, so the tests follow the spec.
+- **Left open:** a header line that ends in a bare `\n`; `*0` and `*-1`; `$-1` inside a request; a bulk length of exactly 512 MiB; a top-level bulk string such as `$3\r\nfoo\r\n`; very large array counts; `+5` as a length.
+- **Writes and closing.** The test sends each bad request in one write and ends it where the error shows. This lets the server read all input before it closes, so a TCP reset cannot hide the error reply.
 
-- **Arity of PING and DBSIZE.** The spec lists only `PING`, `PING msg` and a bare `DBSIZE`. The tests expect the wrong-number error for `PING a b` and `DBSIZE a`.
-- **Arguments that are open.** The tests do not send arguments to `QUIT`, `COMMAND` (for example `COMMAND DOCS`) or `FLUSHALL` (for example `ASYNC`), and they do not send extra arguments to `EXPIRE` or `PEXPIRE`.
-- **Errors change nothing.** The tests expect a command that gets any error reply to leave the data as it was. For example, `MSET a 1 b` creates no key, `INCRBY none x` creates no key, and a `SET` with a syntax error keeps the old value and its expiry.
-- **SET option order and case.** The spec grammar puts `EX`/`PX` before `NX`/`XX`. The tests use only that order and only upper-case options. Real Redis accepts any order and any case, but these are open.
-- **SET option repeated.** `EX 10 EX 20` is open. The tests check only `EX` with `PX`, `NX` with `XX`, an unknown option, and `EX` with no number. They treat all four as syntax errors, because `EX` with no number is a bad option.
-- **SET with a zero or negative EX/PX.** The spec says that `EX` and `PX` need a positive integer, but it does not name the error. The reply can be the integer error, or the Redis text `invalid expire time in 'set' command`. The tests accept any error reply and check that the key is unchanged. A value that is not a number (`EX ten`, `PX 1.5`) must get the exact integer error.
-- **EXPIRE with zero or a negative time on a key that exists.** The tests expect the reply `1` and the key gone. The key was not missing, so `1` follows from the spec.
-- **Very large expiry times.** Overflow in `EX`, `PX`, `EXPIRE` and `PEXPIRE` is open.
-- **Expiry after other writes.** The spec does not say if `MSET` clears an expiry or if `APPEND` keeps one. The tests do not check either case. The tests check that `SET` without `EX`/`PX` clears the expiry, that a failed `SET NX` keeps it, and that `INCR`, `DECR`, `INCRBY` and `DECRBY` keep it.
-- **DEL with the same key twice.** The spec says that `EXISTS` counts a repeated key twice and that `DEL` counts the keys it removed. The tests expect `DEL c c` to reply `1`.
-- **Integer parsing.** The tests use only clear cases. These values must get the integer error: `abc`, `1.5`, `12abc`, the empty string and `9223372036854775808`. Forms such as `+5`, `007` and ` 5` are open, because Go's `strconv.ParseInt` and Redis do not agree on them.
-- **DECRBY with the smallest int64.** `DECRBY zero -9223372036854775808` on a missing key would give 2^63, which overflows. The tests expect the integer error and no key created. A builder who turns `DECRBY n` into `INCRBY -n` fails this test, because `-(-2^63)` wraps to itself in Go.
-- **TTL rounding.** The tests set `PX 2800` and expect `TTL` to reply 3, set `PX 2200` and expect 2, and then `PEXPIRE 1800` and expect 2. Truncation gives 2 for the first case, and ceiling gives 3 for the second, so both fail. Each case allows 300 ms of delay. A half-second remainder is open: the delay makes that case unreliable to test.
-- **Other TTL and PTTL values.** Elsewhere, the tests accept a range, for example 99 to 100 for `EX 100`, so that a slow machine does not fail them.
-- **Expired keys in DBSIZE and KEYS.** The spec says that an expired key acts as missing "in every command, as soon as its time has passed". The tests expect `DBSIZE` and `KEYS *` to leave out expired keys at once, before any background sweep. Real Redis counts such keys in `DBSIZE` until it removes them. That behavior fails the test.
-- **Expired keys in write commands.** After a key expires, `SET NX` must succeed, `SET XX` must fail, and `INCR` and `APPEND` must start from an empty key. The new keys have no expiry (`TTL` replies -1).
-- **KEYS patterns.** The tests check `*`, `?`, `[ae]`, `[^e]`, `[a-e]`, `[w-z]`, `\*` and `\?` on ASCII keys, and compare the keys in any order. These cases are open: an unclosed `[`, a reversed range, an escape inside a class, and multi-byte characters with `?`.
-- **Command names with control bytes.** An unknown command name that holds `\r\n` would break the error line. The tests do not send one.
-- **Empty strings.** The tests expect `ECHO ""` to reply with an empty bulk string, `APPEND k ""` to reply with the current length, and an empty value to fail `INCR`.
+## Errors
+
+- **Unknown command.** The reply is exactly `-ERR unknown command 'NAME'`, with NAME as the client wrote it. Names that hold `\r` or `\n` are left open.
+- **Wrong number of arguments.** The tests use Redis 7 arity for each listed command. Examples: `PING a b`, `ECHO a b`, `DBSIZE x`, `KEYS a b` and `MSET` with an odd count.
+- **Left open, because the spec does not list these options:** extra arguments to `EXPIRE`/`PEXPIRE` (Redis: NX/XX/GT/LT), to `FLUSHALL` (ASYNC/SYNC), to `QUIT` and to `COMMAND` (such as `COMMAND DOCS`).
+- **`SET ... EX 0` and negative times.** Redis 7 replies `ERR invalid expire time in 'set' command`. The spec's "out-of-range integer" rule could mean the integer error. The tests accept any `-ERR ` reply and check that the key does not change.
+- **Left open:** EX/PX/EXPIRE values that overflow when added to the current time; repeated options (`EX 1 EX 2`, `NX NX`).
+
+## Compatibility with Redis 7
+
+The spec says that each listed command gives the same reply as Redis 7. The tests check these Redis behaviors, which the command list does not state outright:
+
+- SET options are case-insensitive and can come in any order. `SET k v EX` with no number is a syntax error.
+- Integers are read as Redis reads them: an optional `-` and digits with no leading zero. Each of `+1`, `01`, `-0`, ` 1`, `1 `, an empty string, `1.0`, `0x1` and `1e3` gets the integer error. This applies to INCR on a stored value, to the INCRBY and EXPIRE arguments, and to SET EX/PX. A builder who uses `strconv.ParseInt` alone fails this test, `TestIntegerSyntaxMatchesRedis`.
+- `MSET` removes the expiry, as `SET` does. `APPEND` keeps it.
+- `DEL k k` counts 1. `EXISTS k k` counts 2, as the spec says.
+- `APPEND k ""` on a missing key creates the key and replies 0.
+- `PING ""` and `ECHO ""` reply with an empty bulk string.
+- `KEYS` with `*` matches every byte, including `\r`, `\n` and zero.
+- **Overflow messages.** Redis 7 words its overflow errors in its own way. The spec fixes the integer error for overflow, so the tests want that error.
+- **`DECRBY k -9223372036854775808`.** Redis rejects this for every value. The spec rejects it only when the result overflows. The tests use it only on a missing key (0), where both rules give an error.
+- **`DBSIZE` right after an expiry.** Redis can count keys that it has not deleted yet. The spec says that an expired key is missing in every command, so the tests want `DBSIZE` and `KEYS` to skip expired keys at once.
+
+## Timing
+
+- TTL checks after `EX 100` accept 98 to 100 seconds. PTTL checks accept 98000 to 100000 ms.
+- **Rounding.** The test sets PX 2400, 2900, 1300 and 1800. TTL must then reply 2, 3, 1 and 2. Rounding to the nearest second gives these replies. Truncation or rounding up gives a different reply in at least one case. Each TTL runs a few ms after its expiry is set, and the margin is 400 ms.
+- **Expiry.** Keys get PX 100 or PEXPIRE 100, and the test waits 300 ms. The key must then be missing in every command, including the writes `SET XX`, `SET NX`, `INCR` (on an expired value that is not an integer) and `APPEND`.
+
+## redis-cli
+
+- The test runs `redis-cli` from PATH with `-p PORT`, as the spec does. If redis-cli is missing, the test fails. The test does not check the version.
+- Stdout is not a terminal, so redis-cli prints raw replies. The test removes trailing newlines and then compares the output with `OK`, `v`, `PONG`, `1` and `2`.

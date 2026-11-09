@@ -1,9 +1,11 @@
 // Command rotom is the reference answer for the rotom eval: a RESP2 server
-// that keeps strings in memory. It exists only to prove the hidden tests right.
+// that keeps strings in memory.
 package main
 
 import (
 	"bufio"
+	"bytes"
+	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -13,7 +15,6 @@ import (
 	"net"
 	"os"
 	"os/signal"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -22,10 +23,10 @@ import (
 )
 
 func main() {
-	addr := flag.String("addr", "127.0.0.1:6379", "listen address; port 0 picks a free port")
+	addr := flag.String("addr", "127.0.0.1:6379", "listen address")
 	flag.Parse()
-	stop := make(chan os.Signal, 1)
-	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 	ln, err := net.Listen("tcp", *addr)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "rotom:", err)
@@ -33,85 +34,89 @@ func main() {
 	}
 	fmt.Println("ready", ln.Addr())
 
-	s := newStore()
+	db := &store{m: map[string]item{}}
+	go func() {
+		// Lookups drop expired keys; this drops the ones nobody asks for.
+		for range time.Tick(time.Second) {
+			db.sweep()
+		}
+	}()
+
 	var mu sync.Mutex
 	conns := map[net.Conn]bool{}
 	go func() {
 		for {
-			c, err := ln.Accept()
-			if err != nil {
-				// shortcut: any accept error stops accepting; retry temporary errors if this serves real load
+			conn, err := ln.Accept()
+			if errors.Is(err, net.ErrClosed) {
 				return
 			}
+			if err != nil {
+				time.Sleep(10 * time.Millisecond)
+				continue
+			}
 			mu.Lock()
-			conns[c] = true
+			conns[conn] = true
 			mu.Unlock()
 			go func() {
-				s.serve(c)
+				db.serve(conn)
 				mu.Lock()
-				delete(conns, c)
+				delete(conns, conn)
 				mu.Unlock()
 			}()
 		}
 	}()
-	<-stop
+
+	<-ctx.Done()
 	ln.Close()
 	mu.Lock()
-	for c := range conns {
-		c.Close()
+	defer mu.Unlock()
+	for conn := range conns {
+		conn.Close()
 	}
-	mu.Unlock()
 }
 
-// flushReader sends the buffered replies before each wait for more input,
-// so pipelined replies go out together and no reply waits behind a read.
-type flushReader struct {
-	c net.Conn
-	w *bufio.Writer
-}
-
-func (f flushReader) Read(p []byte) (int, error) {
-	if err := f.w.Flush(); err != nil {
-		return 0, err
-	}
-	return f.c.Read(p)
-}
-
-func (s *store) serve(c net.Conn) {
-	defer c.Close()
-	w := bufio.NewWriter(c)
-	defer w.Flush()
-	r := bufio.NewReader(flushReader{c, w})
+// serve answers the commands on one connection until it closes.
+func (db *store) serve(conn net.Conn) {
+	defer conn.Close()
+	r := bufio.NewReaderSize(conn, 64<<10)
 	for {
-		a, err := readCommand(r)
-		if reason, bad := errors.AsType[protoError](err); bad {
-			w.WriteString("-ERR Protocol error: " + string(reason) + "\r\n")
+		args, err := readCommand(r)
+		if pe, ok := errors.AsType[protoError](err); ok {
+			io.WriteString(conn, "-ERR Protocol error: "+string(pe)+"\r\n")
+			return
 		}
 		if err != nil {
-			return
+			return // the client closed the connection, maybe in the middle of a request
 		}
-		if len(a) == 0 {
+		if len(args) == 0 {
 			continue
 		}
-		w.WriteString(s.exec(a))
-		if strings.EqualFold(a[0], "quit") {
+		reply, quit := db.exec(args)
+		if _, err := io.WriteString(conn, reply); err != nil || quit {
 			return
 		}
 	}
 }
 
-// protoError is a malformed request. The server sends it and closes the
-// connection.
 type protoError string
 
-func (e protoError) Error() string {
-	return string(e)
-}
+func (e protoError) Error() string { return "protocol error: " + string(e) }
 
 const maxBulk = 512 << 20
 
-// readCommand reads one request. A blank inline line gives no arguments.
-// Any other error means the client closed the connection mid-request.
+func readLine(r *bufio.Reader) (string, error) {
+	line, err := r.ReadSlice('\n')
+	if errors.Is(err, bufio.ErrBufferFull) {
+		return "", protoError("too big request line")
+	}
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSuffix(strings.TrimSuffix(string(line), "\n"), "\r"), nil
+}
+
+// readCommand reads one request. An empty result means a blank inline line
+// or an empty array, which get no reply.
 func readCommand(r *bufio.Reader) ([]string, error) {
 	line, err := readLine(r)
 	if err != nil {
@@ -122,341 +127,410 @@ func readCommand(r *bufio.Reader) ([]string, error) {
 		return strings.Fields(line), nil
 	}
 	n, err := strconv.Atoi(count)
-	if err != nil || n < 0 {
+	if err != nil {
 		return nil, protoError("invalid multibulk length")
 	}
-	var args []string
+	args := make([]string, 0, min(max(n, 0), 64))
 	for range n {
 		line, err := readLine(r)
 		if err != nil {
 			return nil, err
 		}
-		size, isBulk := strings.CutPrefix(line, "$")
-		l, err := strconv.Atoi(size)
-		if !isBulk || err != nil || l < 0 || l > maxBulk {
+		length, isBulk := strings.CutPrefix(line, "$")
+		if !isBulk {
+			return nil, protoError("expected '$'")
+		}
+		size, err := strconv.Atoi(length)
+		if err != nil || size < 0 || size > maxBulk {
 			return nil, protoError("invalid bulk length")
 		}
-		// CopyN grows the buffer with the data that arrives, not with the length the client claims.
-		var b strings.Builder
-		if _, err := io.CopyN(&b, r, int64(l)+2); err != nil {
+		// The buffer grows as data arrives, so a big length alone costs nothing.
+		var b bytes.Buffer
+		if _, err := io.CopyN(&b, r, int64(size)+2); err != nil {
 			return nil, err
 		}
-		arg, hasCRLF := strings.CutSuffix(b.String(), "\r\n")
-		if !hasCRLF {
-			return nil, protoError("expected CRLF after bulk string")
+		data := b.Bytes()
+		if !bytes.HasSuffix(data, []byte("\r\n")) {
+			return nil, protoError("expected CRLF after bulk data")
 		}
-		args = append(args, arg)
+		args = append(args, string(data[:size]))
 	}
 	return args, nil
 }
 
-// readLine reads a line that ends in "\n" or "\r\n" and drops the ending.
-func readLine(r *bufio.Reader) (string, error) {
-	// shortcut: a line has no length limit; cap it if untrusted clients connect
-	line, err := r.ReadString('\n')
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSuffix(line[:len(line)-1], "\r"), nil
+const (
+	okReply   = "+OK\r\n"
+	nullReply = "$-1\r\n"
+	errInt    = "-ERR value is not an integer or out of range\r\n"
+	errSyntax = "-ERR syntax error\r\n"
+)
+
+func bulk(s string) string { return "$" + strconv.Itoa(len(s)) + "\r\n" + s + "\r\n" }
+
+func integer(n int64) string { return ":" + strconv.FormatInt(n, 10) + "\r\n" }
+
+func array(items []string) string {
+	return "*" + strconv.Itoa(len(items)) + "\r\n" + strings.Join(items, "")
 }
 
-type entry struct {
-	val string
-	exp time.Time // zero means no expiry
+func wrongArgs(name string) string {
+	return "-ERR wrong number of arguments for '" + name + "' command\r\n"
 }
 
-func (e entry) expired(now time.Time) bool {
-	return !e.exp.IsZero() && !now.Before(e.exp)
-}
-
-// store holds the keys. One mutex guards the map, and every command holds it.
-type store struct {
-	mu sync.Mutex
-	m  map[string]entry
-}
-
-func newStore() *store {
-	s := &store{m: map[string]entry{}}
-	go func() {
-		for range time.Tick(time.Second) {
-			s.mu.Lock()
-			now := time.Now()
-			maps.DeleteFunc(s.m, func(_ string, e entry) bool { return e.expired(now) })
-			s.mu.Unlock()
-		}
-	}()
-	return s
-}
-
-// get returns the live entry for key. It deletes the key if it has expired.
-func (s *store) get(key string) (entry, bool) {
-	e, found := s.m[key]
-	if found && e.expired(time.Now()) {
-		delete(s.m, key)
-		return entry{}, false
-	}
-	return e, found
-}
-
-func (s *store) value(key string) string {
-	e, found := s.get(key)
-	if !found {
-		return replyNull
-	}
-	return bulk(e.val)
-}
+var lineBreaks = strings.NewReplacer("\r", " ", "\n", " ")
 
 type command struct {
-	name     string
-	min, max int
+	// arity counts the command name, as in Redis: n means exactly n, -n at least n.
+	arity int
+	run   func(db *store, a []string) string
 }
 
-// commands lists each command with its least and greatest argument count,
-// name included. A max of 0 means no limit.
-var commands = []command{
-	{"ping", 1, 2}, {"echo", 2, 2}, {"quit", 1, 0}, {"command", 1, 0},
-	{"set", 3, 0}, {"get", 2, 2}, {"mset", 3, 0}, {"mget", 2, 0},
-	{"del", 2, 0}, {"exists", 2, 0}, {"incr", 2, 2}, {"decr", 2, 2},
-	{"incrby", 3, 3}, {"decrby", 3, 3}, {"append", 3, 3}, {"strlen", 2, 2},
-	{"expire", 3, 3}, {"pexpire", 3, 3}, {"ttl", 2, 2}, {"pttl", 2, 2},
-	{"persist", 2, 2}, {"keys", 2, 2}, {"type", 2, 2}, {"dbsize", 1, 1},
-	{"flushall", 1, 1},
+var commands = map[string]command{
+	"ping":     {-1, pingCmd},
+	"echo":     {2, echoCmd},
+	"command":  {-1, commandCmd},
+	"set":      {-3, setCmd},
+	"get":      {2, getCmd},
+	"mset":     {-3, msetCmd},
+	"mget":     {-2, mgetCmd},
+	"del":      {-2, delCmd},
+	"exists":   {-2, existsCmd},
+	"incr":     {2, incrCmd},
+	"decr":     {2, decrCmd},
+	"incrby":   {3, incrbyCmd},
+	"decrby":   {3, decrbyCmd},
+	"append":   {3, appendCmd},
+	"strlen":   {2, strlenCmd},
+	"expire":   {-3, expireCmd},
+	"pexpire":  {-3, pexpireCmd},
+	"ttl":      {2, ttlCmd},
+	"pttl":     {2, pttlCmd},
+	"persist":  {2, persistCmd},
+	"keys":     {2, keysCmd},
+	"type":     {2, typeCmd},
+	"dbsize":   {1, dbsizeCmd},
+	"flushall": {-1, flushallCmd},
 }
 
-func (s *store) exec(a []string) string {
-	name := strings.ToLower(a[0])
-	i := slices.IndexFunc(commands, func(c command) bool { return c.name == name })
-	if i < 0 {
-		return "-ERR unknown command '" + a[0] + "'\r\n"
+// exec runs one command and reports whether the connection must close.
+func (db *store) exec(args []string) (string, bool) {
+	name := strings.ToLower(args[0])
+	if name == "quit" {
+		return okReply, true
 	}
-	if c := commands[i]; len(a) < c.min || (c.max > 0 && len(a) > c.max) {
-		return wrongArgs(name)
+	cmd, found := commands[name]
+	switch {
+	case !found:
+		return "-ERR unknown command '" + lineBreaks.Replace(args[0]) + "'\r\n", false
+	case cmd.arity > 0 && len(args) != cmd.arity, cmd.arity < 0 && len(args) < -cmd.arity:
+		return wrongArgs(name), false
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	switch name {
-	case "ping":
-		if len(a) == 2 {
-			return bulk(a[1])
-		}
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	return cmd.run(db, args[1:]), false
+}
+
+type item struct {
+	val string
+	// exp is the expiry as Unix time in milliseconds, or 0 for none.
+	exp int64
+}
+
+func (it item) expired(now int64) bool { return it.exp != 0 && it.exp <= now }
+
+type store struct {
+	mu sync.Mutex
+	m  map[string]item
+}
+
+// lookup returns the live item for key and drops it if it has expired.
+// The caller holds db.mu.
+func (db *store) lookup(key string) (item, bool) {
+	it, ok := db.m[key]
+	if ok && it.expired(time.Now().UnixMilli()) {
+		delete(db.m, key)
+		return item{}, false
+	}
+	return it, ok
+}
+
+func (db *store) sweep() {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	now := time.Now().UnixMilli()
+	maps.DeleteFunc(db.m, func(_ string, it item) bool { return it.expired(now) })
+}
+
+// parseInt accepts what Redis accepts: an optional '-', then digits with no
+// leading zero. It rejects '+', spaces and "-0".
+func parseInt(s string) (int64, bool) {
+	digits := strings.TrimPrefix(s, "-")
+	if s != "0" && (digits == "" || digits[0] < '1' || digits[0] > '9') {
+		return 0, false
+	}
+	n, err := strconv.ParseInt(s, 10, 64)
+	return n, err == nil
+}
+
+// expiry returns the Unix time in ms that is n units of per ms from now.
+// n must be positive. It reports false on overflow.
+func expiry(n, per int64) (int64, bool) {
+	now := time.Now().UnixMilli()
+	limit := (math.MaxInt64 - now) / per
+	if n > limit {
+		return 0, false
+	}
+	return now + n*per, true
+}
+
+func pingCmd(_ *store, a []string) string {
+	switch len(a) {
+	case 0:
 		return "+PONG\r\n"
-	case "echo":
-		return bulk(a[1])
-	case "quit":
-		return replyOK
-	case "command":
-		return "*0\r\n"
-	case "set":
-		return s.set(a)
-	case "get":
-		return s.value(a[1])
-	case "mset":
-		if len(a)%2 == 0 {
-			return wrongArgs(name)
-		}
-		for i := 1; i < len(a); i += 2 {
-			s.m[a[i]] = entry{val: a[i+1]}
-		}
-		return replyOK
-	case "mget":
-		out := make([]string, 0, len(a)-1)
-		for _, k := range a[1:] {
-			out = append(out, s.value(k))
-		}
-		return array(out)
-	case "del":
-		n := 0
-		for _, k := range a[1:] {
-			if _, found := s.get(k); found {
-				delete(s.m, k)
-				n++
-			}
-		}
-		return integer(n)
-	case "exists":
-		n := 0
-		for _, k := range a[1:] {
-			if _, found := s.get(k); found {
-				n++
-			}
-		}
-		return integer(n)
-	case "incr", "incrby":
-		return s.add(a, false)
-	case "decr", "decrby":
-		return s.add(a, true)
-	case "append":
-		e, _ := s.get(a[1])
-		e.val += a[2]
-		s.m[a[1]] = e
-		return integer(len(e.val))
-	case "strlen":
-		e, _ := s.get(a[1])
-		return integer(len(e.val))
-	case "expire":
-		return s.expire(a, time.Second)
-	case "pexpire":
-		return s.expire(a, time.Millisecond)
-	case "ttl":
-		return s.ttl(a[1], time.Second)
-	case "pttl":
-		return s.ttl(a[1], time.Millisecond)
-	case "persist":
-		e, found := s.get(a[1])
-		if !found || e.exp.IsZero() {
-			return integer(0)
-		}
-		e.exp = time.Time{}
-		s.m[a[1]] = e
-		return integer(1)
-	case "keys":
-		var out []string
-		for k := range s.m {
-			if _, found := s.get(k); found && match(a[1], k) {
-				out = append(out, bulk(k))
-			}
-		}
-		return array(out)
-	case "type":
-		if _, found := s.get(a[1]); found {
-			return "+string\r\n"
-		}
-		return "+none\r\n"
-	case "dbsize":
-		n := 0
-		for k := range s.m {
-			if _, found := s.get(k); found {
-				n++
-			}
-		}
-		return integer(n)
-	default: // flushall, the last name in the table
-		clear(s.m)
-		return replyOK
+	case 1:
+		return bulk(a[0])
 	}
+	return wrongArgs("ping")
 }
 
-func (s *store) set(a []string) string {
-	var ttl time.Duration
+func echoCmd(_ *store, a []string) string { return bulk(a[0]) }
+
+func commandCmd(*store, []string) string { return "*0\r\n" }
+
+func setCmd(db *store, a []string) string {
 	var nx, xx bool
-	for i := 3; i < len(a); i++ {
-		switch opt := strings.ToUpper(a[i]); opt {
-		case "NX":
+	var unit string
+	var exp int64
+	for i := 2; i < len(a); i++ {
+		opt := strings.ToUpper(a[i])
+		switch {
+		case opt == "NX" && !xx:
 			nx = true
-		case "XX":
+		case opt == "XX" && !nx:
 			xx = true
-		case "EX", "PX":
-			if ttl != 0 || i+1 == len(a) {
-				return errSyntax
-			}
+		case (opt == "EX" || opt == "PX") && (unit == "" || unit == opt) && i+1 < len(a):
 			i++
-			unit := time.Second
-			if opt == "PX" {
-				unit = time.Millisecond
-			}
-			d, valid := duration(a[i], unit)
-			if !valid || d <= 0 {
+			n, ok := parseInt(a[i])
+			if !ok || n <= 0 {
 				return errInt
 			}
-			ttl = d
+			per := int64(1)
+			if opt == "EX" {
+				per = 1000
+			}
+			if exp, ok = expiry(n, per); !ok {
+				return errInt
+			}
+			unit = opt
 		default:
 			return errSyntax
 		}
 	}
-	if nx && xx {
-		return errSyntax
+	_, exists := db.lookup(a[0])
+	if nx && exists || xx && !exists {
+		return nullReply
 	}
-	if _, found := s.get(a[1]); (nx && found) || (xx && !found) {
-		return replyNull
-	}
-	e := entry{val: a[2]}
-	if ttl > 0 {
-		e.exp = time.Now().Add(ttl)
-	}
-	s.m[a[1]] = e
-	return replyOK
+	db.m[a[0]] = item{a[1], exp}
+	return okReply
 }
 
-// add adds the step in a[2], or 1 without one, to the integer at key a[1].
-// With sub it subtracts the step.
-func (s *store) add(a []string, sub bool) string {
-	step := int64(1)
-	if len(a) == 3 {
-		var err error
-		if step, err = strconv.ParseInt(a[2], 10, 64); err != nil {
-			return errInt
+func getCmd(db *store, a []string) string {
+	if it, ok := db.lookup(a[0]); ok {
+		return bulk(it.val)
+	}
+	return nullReply
+}
+
+func msetCmd(db *store, a []string) string {
+	if len(a)%2 != 0 {
+		return wrongArgs("mset")
+	}
+	for i := 0; i < len(a); i += 2 {
+		db.m[a[i]] = item{val: a[i+1]}
+	}
+	return okReply
+}
+
+func mgetCmd(db *store, a []string) string {
+	out := make([]string, 0, len(a))
+	for _, k := range a {
+		if it, ok := db.lookup(k); ok {
+			out = append(out, bulk(it.val))
+		} else {
+			out = append(out, nullReply)
 		}
 	}
-	e, found := s.get(a[1])
+	return array(out)
+}
+
+func delCmd(db *store, a []string) string {
 	var n int64
-	if found {
-		var err error
-		if n, err = strconv.ParseInt(e.val, 10, 64); err != nil {
+	for _, k := range a {
+		if _, ok := db.lookup(k); ok {
+			delete(db.m, k)
+			n++
+		}
+	}
+	return integer(n)
+}
+
+func existsCmd(db *store, a []string) string {
+	var n int64
+	for _, k := range a {
+		if _, ok := db.lookup(k); ok {
+			n++
+		}
+	}
+	return integer(n)
+}
+
+func incrCmd(db *store, a []string) string { return db.incrBy(a[0], 1) }
+
+func decrCmd(db *store, a []string) string { return db.incrBy(a[0], -1) }
+
+func incrbyCmd(db *store, a []string) string {
+	n, ok := parseInt(a[1])
+	if !ok {
+		return errInt
+	}
+	return db.incrBy(a[0], n)
+}
+
+func decrbyCmd(db *store, a []string) string {
+	n, ok := parseInt(a[1])
+	if !ok || n == math.MinInt64 {
+		return errInt
+	}
+	return db.incrBy(a[0], -n)
+}
+
+// incrBy adds by to the integer at key and keeps the expiry.
+func (db *store) incrBy(key string, by int64) string {
+	it, exists := db.lookup(key)
+	var cur int64
+	if exists {
+		var ok bool
+		if cur, ok = parseInt(it.val); !ok {
 			return errInt
 		}
 	}
-	r := n + step
-	fits := (r > n) == (step > 0)
-	if sub {
-		r = n - step
-		fits = (r < n) == (step > 0)
-	}
-	if !fits {
+	sum := cur + by
+	if by > 0 && sum < cur || by < 0 && sum > cur {
 		return errInt
 	}
-	e.val = strconv.FormatInt(r, 10)
-	s.m[a[1]] = e
-	return integer(r)
+	it.val = strconv.FormatInt(sum, 10)
+	db.m[key] = it
+	return integer(sum)
 }
 
-func (s *store) expire(a []string, unit time.Duration) string {
-	d, valid := duration(a[2], unit)
-	if !valid {
+func appendCmd(db *store, a []string) string {
+	it, _ := db.lookup(a[0])
+	it.val += a[1]
+	db.m[a[0]] = it
+	return integer(int64(len(it.val)))
+}
+
+func strlenCmd(db *store, a []string) string {
+	it, _ := db.lookup(a[0])
+	return integer(int64(len(it.val)))
+}
+
+func expireCmd(db *store, a []string) string { return db.expire(a, 1000) }
+
+func pexpireCmd(db *store, a []string) string { return db.expire(a, 1) }
+
+func (db *store) expire(a []string, per int64) string {
+	n, ok := parseInt(a[1])
+	if !ok {
 		return errInt
 	}
-	e, found := s.get(a[1])
-	switch {
-	case !found:
-		return integer(0)
-	case d <= 0:
-		delete(s.m, a[1])
-	default:
-		e.exp = time.Now().Add(d)
-		s.m[a[1]] = e
+	if len(a) > 2 {
+		return errSyntax // NX, XX, GT and LT are not in the spec
 	}
+	it, exists := db.lookup(a[0])
+	if !exists {
+		return integer(0)
+	}
+	if n <= 0 {
+		delete(db.m, a[0])
+		return integer(1)
+	}
+	if it.exp, ok = expiry(n, per); !ok {
+		return errInt
+	}
+	db.m[a[0]] = it
 	return integer(1)
 }
 
-func (s *store) ttl(key string, unit time.Duration) string {
-	e, found := s.get(key)
+func ttlCmd(db *store, a []string) string { return db.ttl(a[0], 1000) }
+
+func pttlCmd(db *store, a []string) string { return db.ttl(a[0], 1) }
+
+func (db *store) ttl(key string, per int64) string {
+	it, ok := db.lookup(key)
 	switch {
-	case !found:
+	case !ok:
 		return integer(-2)
-	case e.exp.IsZero():
+	case it.exp == 0:
 		return integer(-1)
 	}
-	return integer(int64(time.Until(e.exp).Round(unit) / unit))
+	left := max(it.exp-time.Now().UnixMilli(), 0)
+	rounded := (left + per/2) / per
+	return integer(rounded)
 }
 
-// duration parses n as a count of unit. It reports false if n is not an
-// integer or the duration does not fit in a time.Duration.
-func duration(n string, unit time.Duration) (time.Duration, bool) {
-	v, err := strconv.ParseInt(n, 10, 64)
-	limit := int64(math.MaxInt64 / unit)
-	if err != nil || v > limit || v < -limit {
-		return 0, false
+func persistCmd(db *store, a []string) string {
+	it, ok := db.lookup(a[0])
+	if !ok || it.exp == 0 {
+		return integer(0)
 	}
-	return time.Duration(v) * unit, true
+	it.exp = 0
+	db.m[a[0]] = it
+	return integer(1)
 }
 
-// match reports whether s matches the glob pattern p. It supports *, ?,
-// [abc], [a-c], [^a] and \ to escape a character.
+func keysCmd(db *store, a []string) string {
+	var out []string
+	for k := range db.m {
+		if _, ok := db.lookup(k); ok && match(a[0], k) {
+			out = append(out, bulk(k))
+		}
+	}
+	return array(out)
+}
+
+func typeCmd(db *store, a []string) string {
+	if _, ok := db.lookup(a[0]); ok {
+		return "+string\r\n"
+	}
+	return "+none\r\n"
+}
+
+func dbsizeCmd(db *store, _ []string) string {
+	var n int64
+	for k := range db.m {
+		if _, ok := db.lookup(k); ok {
+			n++
+		}
+	}
+	return integer(n)
+}
+
+func flushallCmd(db *store, _ []string) string {
+	clear(db.m)
+	return okReply
+}
+
+// match reports whether s matches the glob pattern p, with the rules of
+// Redis KEYS: *, ?, [abc], [a-c], [^a] and \ to escape.
 func match(p, s string) bool {
-	for p != "" {
+	for len(p) > 0 {
 		switch p[0] {
 		case '*':
-			p = strings.TrimLeft(p, "*")
-			if p == "" {
+			for len(p) > 0 && p[0] == '*' {
+				p = p[1:]
+			}
+			if len(p) == 0 {
 				return true
 			}
 			for i := range len(s) + 1 {
@@ -466,76 +540,50 @@ func match(p, s string) bool {
 			}
 			return false
 		case '?':
-			if s == "" {
+			if len(s) == 0 {
 				return false
 			}
 			p, s = p[1:], s[1:]
 		case '[':
-			if s == "" {
+			if len(s) == 0 {
 				return false
 			}
-			hit, rest := class(p[1:], s[0])
-			if !hit {
+			p = p[1:]
+			negate := len(p) > 0 && p[0] == '^'
+			if negate {
+				p = p[1:]
+			}
+			found := false
+			for len(p) > 0 && p[0] != ']' {
+				switch {
+				case p[0] == '\\' && len(p) > 1:
+					found = found || p[1] == s[0]
+					p = p[2:]
+				case len(p) > 2 && p[1] == '-':
+					lo, hi := min(p[0], p[2]), max(p[0], p[2])
+					found = found || lo <= s[0] && s[0] <= hi
+					p = p[3:]
+				default:
+					found = found || p[0] == s[0]
+					p = p[1:]
+				}
+			}
+			p = strings.TrimPrefix(p, "]")
+			if found == negate {
 				return false
 			}
-			p, s = rest, s[1:]
+			s = s[1:]
 		case '\\':
 			if len(p) > 1 {
 				p = p[1:]
 			}
 			fallthrough
 		default:
-			if s == "" || p[0] != s[0] {
+			if len(s) == 0 || p[0] != s[0] {
 				return false
 			}
 			p, s = p[1:], s[1:]
 		}
 	}
-	return s == ""
-}
-
-// class matches c against the set that starts after a '[' in p. It also
-// returns the rest of p after the closing ']'.
-func class(p string, c byte) (bool, string) {
-	p, negate := strings.CutPrefix(p, "^")
-	hit := false
-	for p != "" && p[0] != ']' {
-		lo := p[0]
-		if lo == '\\' && len(p) > 1 {
-			p = p[1:]
-			lo = p[0]
-		}
-		p = p[1:]
-		hi := lo
-		if len(p) > 1 && p[0] == '-' && p[1] != ']' {
-			hi, p = p[1], p[2:]
-		}
-		if min(lo, hi) <= c && c <= max(lo, hi) {
-			hit = true
-		}
-	}
-	return hit != negate, strings.TrimPrefix(p, "]")
-}
-
-const (
-	replyOK   = "+OK\r\n"
-	replyNull = "$-1\r\n"
-	errInt    = "-ERR value is not an integer or out of range\r\n"
-	errSyntax = "-ERR syntax error\r\n"
-)
-
-func bulk(s string) string {
-	return "$" + strconv.Itoa(len(s)) + "\r\n" + s + "\r\n"
-}
-
-func integer[T int | int64](n T) string {
-	return ":" + strconv.FormatInt(int64(n), 10) + "\r\n"
-}
-
-func array(items []string) string {
-	return "*" + strconv.Itoa(len(items)) + "\r\n" + strings.Join(items, "")
-}
-
-func wrongArgs(name string) string {
-	return "-ERR wrong number of arguments for '" + name + "' command\r\n"
+	return len(s) == 0
 }

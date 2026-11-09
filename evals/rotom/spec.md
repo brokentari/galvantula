@@ -34,3 +34,7 @@ An unknown command gets `ERR unknown command 'NAME'`, where NAME is the command 
 ## Expiry
 
 An expired key behaves as if it were missing in every command, as soon as its time has passed. The store also deletes expired keys in the background, so that memory does not grow without end. Time comes from a clock the store receives, so that tests of the store do not wait.
+
+## Compatibility
+
+`redis-cli` from Redis 7 works with the server. For each command and option above, the server gives the same reply as Redis 7 gives for the same arguments. The exceptions are the error messages and the `COMMAND` reply that this spec fixes, and any option that this spec does not list. For example, `redis-cli -p PORT SET k v` prints `OK`, and `redis-cli -p PORT GET k` then prints `v`.

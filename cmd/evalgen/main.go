@@ -61,7 +61,7 @@ Rules:
 - Test every behavior the spec states. Do not test behavior the spec leaves open; list it in assumptions.md instead.
 - Where the spec fixes the output format, check stdout exactly. For errors, check the exit code and that stderr names what the spec says it names.
 - Each test must fail on a program that does nothing, unless the spec says that case prints nothing.
-- Use only the standard library.
+- Use only the standard library in Go code. If the spec names a real program to compare with, such as redis-cli or redis-server, the tests may run it from PATH. If it is missing, the test must fail, not skip.
 - Run go test ./%[1]s/hidden/ until it passes on the reference. Then run go vet ./..., gofmt -l . and go fix -diff ./... and fix what they report.
 - Change nothing outside %[1]s/.`
 

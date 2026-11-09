@@ -1,11 +1,11 @@
 {
-  "spec_sha256": "57d01d2cf5294cd3350f26096032eddf9dc55b3bc3638b132fcb1428ea00f6ed",
+  "spec_sha256": "6a36c24f0cd0607a1671f252bc86f823b9721a61eee84fac6bfb408ef681ff24",
   "model": "claude-opus-5-5",
   "effort": "xhigh",
-  "claude_version": "2.1.319 (Claude Code)",
-  "generated_at": "2026-11-09T17:16:10.567038Z",
+  "claude_version": "2.1.321 (Claude Code)",
+  "generated_at": "2026-11-09T20:29:56.389384Z",
   "attempts": 1,
-  "cost_usd": 4.154689,
-  "tests": 25,
-  "stub_failures": 25
+  "cost_usd": 4.338281000000001,
+  "tests": 27,
+  "stub_failures": 27
 }
