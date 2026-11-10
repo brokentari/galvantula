@@ -267,7 +267,7 @@ func TestVerifyFailures(t *testing.T) {
 	tests := []struct {
 		name, file, body, want string
 	}{
-		{"a module is required", "go.mod", "module product\n\ngo 1.27\n\nrequire x v1.0.0\n", "go.mod names a module"},
+		{"a module is required", "go.mod", "module product\n\ngo 1.27\n\nrequire x v1.0.0\n", "does not list"},
 		{"wrong go version", "go.mod", "module product\n\ngo 1.20\n", "go.mod must say go 1.27"},
 		{"a failing test", "no_test.go", "package main\n\nimport \"testing\"\n\nfunc TestNo(t *testing.T) {\n\tt.Fatal(\"no\")\n}\n", "go test -race"},
 	}

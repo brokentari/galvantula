@@ -44,6 +44,10 @@ type Claude struct {
 	// Auth holds the credential the sandboxed agent uses:
 	// CLAUDE_CODE_OAUTH_TOKEN=... or ANTHROPIC_API_KEY=...
 	Auth string
+	// Proxy and SumDB say where the runtime and the architect fetch a module
+	// that deps.txt lists. The defaults are the public Go proxy and checksum
+	// database. Tests point them at files.
+	Proxy, SumDB string
 
 	timeout time.Duration // replaces the node time limit in tests
 }
@@ -147,7 +151,7 @@ func (c Claude) agent(ctx context.Context, repo workspace.Repo, t Task, log func
 	}
 	home := filepath.Join(run, "home", t.Node.ID)
 	sessions := filepath.Join(run, "sessions")
-	for _, dir := range []string{home, sessions, c.goModCache()} {
+	for _, dir := range []string{home, sessions} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return Result{}, &InfraError{Err: err}
 		}
@@ -166,6 +170,12 @@ func (c Claude) agent(ctx context.Context, repo workspace.Repo, t Task, log func
 	defer os.RemoveAll(cache)
 	box := c.box(cache, wt, home, []string{c.Auth, "DISABLE_AUTOUPDATER=1"})
 	box.RO = append(box.RO, bin)
+	if p.red {
+		// Only the architect may fetch a module. It needs one to compile its tests.
+		// The module cache is inside its own build cache, which is deleted after.
+		box.Env = append(box.Env, "GOMODCACHE="+filepath.Join(cache, "mod"), "GOFLAGS=-mod=mod -buildvcs=false",
+			"GOPROXY="+cmp.Or(c.Proxy, "https://proxy.golang.org"), "GOSUMDB="+cmp.Or(c.SumDB, "sum.golang.org"))
+	}
 	system := filepath.Join(wt, "AGENTS.md")
 	if p.readOnly {
 		if system, err = c.readOnlyAgent(&box, wt, home, p.system); err != nil {
@@ -253,6 +263,11 @@ func (c Claude) agent(ctx context.Context, repo workspace.Repo, t Task, log func
 	// Remove build output first, so the check sees what main will get.
 	if err := removeBinaries(repo, wt, log); err != nil {
 		return spent, &InfraError{Err: err}
+	}
+	if p.red {
+		if err := c.settleDeps(ctx, wt, log); err != nil {
+			return spent, fmt.Errorf("check failed:\n%w", err)
+		}
 	}
 	log("check")
 	if err := c.check(ctx, repo, wt, t.Node, p, log); err != nil {
@@ -476,7 +491,7 @@ func (c Claude) red(ctx context.Context, box sandbox.Spec, log func(string)) err
 }
 
 // verify is the last step: the whole suite with the race detector, on what
-// is on main, and a check that go.mod still names no module.
+// is on main, and a check that go.mod names only the modules in deps.txt.
 func (c Claude) verify(ctx context.Context, repo workspace.Repo, log func(string)) error {
 	box, cleanup, err := c.readOnlyBox(repo.Dir)
 	if err != nil {
@@ -489,10 +504,11 @@ func (c Claude) verify(ctx context.Context, repo workspace.Repo, log func(string
 	switch {
 	case err != nil:
 		errs = append(errs, err)
-	case strings.Contains(string(mod), "require"):
-		errs = append(errs, errors.New("go.mod names a module; products use only the standard library"))
 	case !strings.Contains(string(mod), "go "+c.Rails.Go.Version+"\n"):
 		errs = append(errs, fmt.Errorf("go.mod must say go %s", c.Rails.Go.Version))
+	}
+	if err := checkDeps(ctx, repo.Dir); err != nil {
+		errs = append(errs, err)
 	}
 	errs = append(errs, runSteps(ctx, box, baseSteps)...)
 	if err := testsPass(ctx, box, minTests, []string{"./..."}, "-race", "-timeout=5m"); err != nil {
@@ -529,12 +545,10 @@ func (c Claude) box(cache, wt, home string, env []string) sandbox.Spec {
 	return sandbox.Spec{
 		Dir:  wt,
 		RW:   []string{wt, home, cache},
-		RO:   []string{c.goModCache()},
 		Home: home,
 		Env: slices.Concat(env, []string{
 			"GOCACHE=" + cache,
-			"GOMODCACHE=" + c.goModCache(),
-			"GOFLAGS=-mod=readonly -buildvcs=false",
+			"GOFLAGS=-buildvcs=false",
 			"GOPROXY=off",
 			"GOTOOLCHAIN=local",
 			"GOTELEMETRY=off",
@@ -554,10 +568,6 @@ func (c Claude) newCache() (string, error) {
 	}
 	return os.MkdirTemp(BuildCaches(c.Root), "go-build-")
 }
-
-// goModCache is the factory's own Go module cache, mounted read-only:
-// GOPROXY is off and products have no dependencies, so nothing writes to it.
-func (c Claude) goModCache() string { return filepath.Join(c.Root, ".cache", "go-mod") }
 
 // claudeBin finds the real claude executable. Updates change its path, so
 // look it up on each attempt.

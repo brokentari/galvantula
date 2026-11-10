@@ -53,7 +53,7 @@ type rolePlan struct {
 // to each agent. It limits the chat replies, not the files an agent writes.
 const ConciseStyle = "Keep every reply to the user short and plain. State the result and nothing else: no preamble, no recap of what you did, no praise. The report a reviewer or planner must give is exempt, and so are the files you write."
 
-const rules = `- Use only the standard library.
+const rules = `- Prefer the standard library. Import a module only if go.mod already lists it: the architect alone adds modules.
 - Do not leave build output, such as compiled programs, in the directory.
 - Do not use t.Skip, t.Skipf or t.SkipNow: the check fails if a test file has one.
 - Before you finish, make all of these pass: gofmt -l . (prints nothing), go vet ./..., go fix -diff ./... (prints nothing) and go build ./...`
@@ -67,7 +67,7 @@ const builderBrief = `Build the program that spec.md describes, in this director
 ` + rules
 
 // architectBrief is built from minTests and minRed, so it always states the rule the check enforces.
-var architectBrief = fmt.Sprintf(architectTemplate, minTests, int(minRed*100))
+var architectBrief = fmt.Sprintf(architectTemplate, minTests, int(minRed*100), maxDeps)
 
 const architectTemplate = `Design the program that spec.md describes, in this directory. Do not implement it. AGENTS.md, which is part of your instructions, holds the rules for the code and its prose.
 
@@ -80,7 +80,8 @@ Rules for the tests:
 - A builder will implement the stubs, and may not change your tests. Test what the spec says, and nothing it leaves open.
 - Every test must fail on the stubs, except a test of a case where doing nothing is correct. The check runs the tests on your stubs and requires at least %d tests, with at least %d%% failing.
 - A second agent will implement your stubs from spec.md and your tests. If its code cannot pass a test, the check fails. Check every expected value against spec.md, and work each by hand: count, sort and trim as the spec says.
-- Do not change or delete a file that was here when you started: AGENTS.md, CLAUDE.md, spec.md, go.mod and .factory/.
+- Use the standard library unless a module makes the code much easier to read than the standard library would, for example a parser or a protocol that would take hundreds of lines. For each module, run go get module@vX.Y.Z in this directory, with an exact release version that is at least two weeks old, and add one line to deps.txt: the module, the version and the reason, in plain words, naming the code it replaces. Use at most %d modules. A person approves the list with the contract. Do not create vendor/ or edit go.sum: the factory makes them.
+- Do not change or delete a file that was here when you started: AGENTS.md, CLAUDE.md, spec.md and .factory/. Change go.mod only with go get.
 ` + rules
 
 const implementerBrief = `Implement the program that spec.md describes, in this directory. The architect has written the contract: CONTRACT.md, the interfaces and stubs, and acceptance tests. AGENTS.md, which is part of your instructions, holds the rules for the code and its prose.
@@ -124,10 +125,10 @@ You can read files but not run commands. Your report is advisory: tests, not you
 // architect's CONTRACT.md.
 func standardsFile(path string) bool {
 	switch path {
-	case "AGENTS.md", "CLAUDE.md", "spec.md", "go.mod", "CONTRACT.md":
+	case "AGENTS.md", "CLAUDE.md", "spec.md", "go.mod", "go.sum", depsFile, "CONTRACT.md":
 		return true
 	}
-	return strings.HasPrefix(path, ".factory/")
+	return strings.HasPrefix(path, ".factory/") || strings.HasPrefix(path, "vendor/")
 }
 
 // testFile reports whether a path is a test or test data, which the
@@ -149,9 +150,10 @@ var plans = map[string]rolePlan{
 		model: func(m guardrails.Models) guardrails.Role { return m.Architect },
 		brief: func(workspace.Repo, Task) (string, error) { return architectBrief, nil },
 		tools: tools, allow: allow, mode: "acceptEdits",
-		red:   true,
-		needs: []string{"CONTRACT.md"},
-		after: logContract,
+		red:    true,
+		frozen: func(f string) bool { return f != "go.mod" }, // go get changes it; settleDeps checks it
+		needs:  []string{"CONTRACT.md"},
+		after:  logContract,
 	},
 	"implementer": {
 		model:    func(m guardrails.Models) guardrails.Role { return m.Implementer },

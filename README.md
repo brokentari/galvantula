@@ -2,7 +2,9 @@
 
 A software factory: a spec in plain English goes in, and a working Go project
 comes out. A Go runtime owns a graph of work. Claude Code runs each agent
-node. A React UI shows each run live. The full plan is in
+node in a sandbox. Tests that the builder never sees score the result. You
+approve the contract and the task graph before the work starts, and the event
+log records every decision. A React UI shows each run live. The full plan is in
 [Software Factory Plan.html](Software%20Factory%20Plan.html).
 
 **Status: phase 3 (the planner and parallel tasks) is built and waits for its
