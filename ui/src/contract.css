@@ -1,0 +1,26 @@
+/* The rendered contract and the task table. Wire tokens only. */
+.contract { display: flex; flex-direction: column; gap: 12px; }
+.contract section { display: flex; flex-direction: column; }
+.sr-only, .skip:not(:focus) { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.skip { color: var(--run); }
+
+.md-line { display: grid; grid-template-columns: 5ch minmax(0, 1fr); gap: 8px; padding: 1px 0; }
+.md-gutter { font: inherit; font-size: 12px; text-align: right; color: var(--muted); padding: 0 4px; min-height: 24px; }
+button.md-gutter { border: 1px solid transparent; }
+button.md-gutter:hover, button.md-gutter:focus-visible { border-color: var(--line-strong); }
+.md-line.added .md-gutter { color: var(--ok); }
+.md-line.removed { color: var(--bad); }
+.md-line.removed .md-block { text-decoration: line-through; }
+.md-block { min-width: 0; overflow-wrap: anywhere; }
+.md-heading { font-weight: 700; margin-top: 8px; }
+.md-code { white-space: pre-wrap; background: var(--surface); border-left: 1px solid var(--line); padding: 0 8px; font-size: 12px; }
+.md-quote { border-left: 2px solid var(--line-strong); padding-left: 8px; color: var(--muted); }
+.md-rule { border-top: 1px solid var(--line); margin: 10px 0; }
+.md-block code { background: var(--surface); border: 1px solid var(--line); border-radius: 2px; padding: 0 3px; font-size: 12px; }
+.md-row > div { display: grid; }
+.md-row span { background: var(--surface); border: 1px solid var(--line); padding: 2px 8px; }
+.md-row .head { font-weight: 700; }
+
+.task-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.task-table th, .task-table td { text-align: left; vertical-align: top; padding: 4px 8px; background: var(--surface); border: 1px solid var(--line); overflow-wrap: anywhere; }
+.task-table th { color: var(--muted); font-weight: 700; }

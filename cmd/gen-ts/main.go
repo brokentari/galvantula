@@ -64,6 +64,8 @@ func generate() string {
 	g.ts(reflect.TypeFor[event.Event]())
 	g.ts(reflect.TypeFor[event.RunSummary]())
 	g.ts(reflect.TypeFor[server.DecideRequest]())
+	g.ts(reflect.TypeFor[server.Snapshot]())
+	g.ts(reflect.TypeFor[server.CritStatus]())
 	g.ts(reflect.TypeFor[event.NodeStatus]())
 
 	var union strings.Builder

@@ -1,0 +1,85 @@
+{
+  "branch": "",
+  "base_ref": "",
+  "updated_at": "2026-11-11T20:19:16Z",
+  "review_round": 1,
+  "review_comments": [
+    {
+      "id": "r_aaed47",
+      "start_line": 0,
+      "end_line": 0,
+      "body": "Overall: close.",
+      "author": "Reviewer",
+      "scope": "review",
+      "created_at": "2026-11-11T20:19:16Z",
+      "updated_at": "2026-11-11T20:19:16Z"
+    }
+  ],
+  "files": {
+    "CONTRACT.md": {
+      "status": "modified",
+      "file_hash": "",
+      "comments": [
+        {
+          "id": "c_162562",
+          "start_line": 5,
+          "end_line": 5,
+          "body": "Return an empty list instead.",
+          "anchor": "line 5 text",
+          "author": "Reviewer",
+          "created_at": "2026-11-11T20:19:16Z",
+          "updated_at": "2026-11-11T20:19:16Z"
+        },
+        {
+          "id": "c_eb59ee",
+          "start_line": 10,
+          "end_line": 12,
+          "body": "Add a test for a missing key.",
+          "anchor": "line 10 text\nline 11 text\nline 12 text",
+          "author": "Reviewer",
+          "created_at": "2026-11-11T20:19:16Z",
+          "updated_at": "2026-11-11T20:19:16Z"
+        },
+        {
+          "id": "c_e03131",
+          "start_line": 0,
+          "end_line": 0,
+          "body": "The file is short. Good.",
+          "author": "Reviewer",
+          "scope": "file",
+          "created_at": "2026-11-11T20:19:16Z",
+          "updated_at": "2026-11-11T20:19:16Z"
+        },
+        {
+          "id": "c_resolv",
+          "start_line": 3,
+          "end_line": 3,
+          "body": "Fixed already.",
+          "author": "Reviewer",
+          "created_at": "2026-11-11T20:19:16Z",
+          "updated_at": "2026-11-11T20:19:16Z",
+          "resolved": true
+        },
+        {
+          "id": "c_quote1",
+          "start_line": 7,
+          "end_line": 7,
+          "body": "Say what this returns.",
+          "author": "Reviewer",
+          "created_at": "2026-11-11T20:19:16Z",
+          "updated_at": "2026-11-11T20:19:16Z",
+          "quote": "line 7 text"
+        },
+        {
+          "id": "c_far400",
+          "start_line": 400,
+          "end_line": 400,
+          "body": "This line is gone.",
+          "author": "Reviewer",
+          "created_at": "2026-11-11T20:19:16Z",
+          "updated_at": "2026-11-11T20:19:16Z"
+        }
+      ]
+    }
+  }
+}

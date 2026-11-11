@@ -13,6 +13,8 @@ agent) and phase 0 passed their standards reviews (`docs/reviews/`). The
 latest results are in `evals/results/`. The costs in them are Claude Code's
 estimates at API prices, not charges on a plan.
 
+![A fake run in the UI: the contract gate with a line comment, a send-back, the task gate, then the build](docs/demo.gif)
+
 ## Run the demo
 
 You need Go 1.27 and Node 22 or later.
@@ -28,9 +30,25 @@ In a second terminal:
 go run ./cmd/factory start -fake fakes/factory.yaml graphs/factory.yaml
 ```
 
-Open http://localhost:7070. The run stops at two gates. Approve each one in
+Open http://localhost:7070. The run stops at two gates. Decide each one in
 the side panel. After the second gate, `pkg-store` and `pkg-api` run at the
 same time, and `pkg-api` fails once and retries.
+
+The first gate, `approve-contract`, shows:
+
+- what to check, as a short list;
+- the counts, such as `12 tests · 12 fail on the stubs`;
+- the contract, with "Unclear in the spec" first. Each line has a number.
+
+To comment on a line, press its number, write, and press **Save comment**.
+The comment stays in your browser as a draft until you approve or reject.
+Reject with a comment to send the contract back. The demo architect then
+writes a revised contract, and round 2 shows what it changed. **Show changes**
+marks new lines and removed lines. Your comments show under the lines that did not change. If the
+architect changed a line, its comment shows in a list above the contract.
+
+The second gate, `approve-tasks`, shows what to check and a table of the
+tasks: what each owns, what it waits for, its retries and its cost cap.
 
 To see crash recovery, stop the server while the packages run (Ctrl-C or
 `kill -9`), then start it again. The run continues from its event log. Work
@@ -63,8 +81,8 @@ the host as usual.
 
 `graphs/phase2.yaml` is the full pipeline: an architect writes the interfaces,
 the acceptance tests and `CONTRACT.md`; you approve the contract at a gate
-(the log shows it, and the file is in the run's repo); an implementer fills in
-the stubs and may not change the tests; a read-only review and a fix answer
+(the gate shows the contract, and the file is in the run's repo); an
+implementer fills in the stubs and may not change the tests; a read-only review and a fix answer
 its findings; verify runs the whole suite with the race detector. Add
 `-auto-approve` to `factory start` to skip the gate, as the evals do.
 
@@ -83,11 +101,30 @@ failed task fails the run. Each replan is a new version of the graph. The UI
 has a graph version menu that shows what each version added, changed and
 replaced.
 
-At the contract gate you may reject with notes. The runtime then sends the
-contract back to the architect: main goes back to the standards commit, and
-the architect gets your notes and the contract you rejected. `budget.revisions`
-in `guardrails.yaml` limits this. A rejection with no notes, or past the limit,
-ends the run.
+At the contract gate you may reject with notes or line comments. The runtime
+then sends the contract back to the architect: main goes back to the
+standards commit, and the architect gets your notes, your comments with the
+lines they quote, and the contract you rejected. `budget.revisions` in
+`guardrails.yaml` limits this. A rejection with no notes and no comment, or
+past the limit, ends the run.
+
+## Review a contract in Crit
+
+This is optional. Crit (`crit`, https://crit.md) is a review tool for text
+files. The server looks for `crit` on your `PATH` when it
+starts. If it finds it, a contract gate shows **Open in Crit**.
+
+The button runs Crit on a copy of the contract. Sharing is off, and Crit gets
+its own home folder in `runs/<run>/crit/<gate>/round-<N>/home`. Comment in
+Crit, then press **Use Crit comments** in the gate. The comments join the gate
+as line comments, and you can still edit them. Deciding the gate stops Crit.
+
+If a killed server leaves Crit running, stop it. Set `HOME` to that round's
+`home` folder:
+
+```
+HOME=runs/<run>/crit/<gate>/round-<N>/home crit stop --all
+```
 
 ## Run the factory from Claude Code
 
@@ -99,9 +136,9 @@ API, so Claude Code and the UI show the same runs. Its tools:
 |---|---|
 | `factory_start` | starts a run from a spec |
 | `factory_runs` | lists the runs |
-| `factory_status` | shows a run, and for each waiting gate what you must read to decide |
+| `factory_status` | shows a run. For each waiting gate it prints what to check, the contract with line numbers, or the task table |
 | `factory_logs` | shows the last log lines of a node, or of every node |
-| `factory_approve` | approves or rejects a gate, with notes |
+| `factory_approve` | approves or rejects a gate, with notes; to comment on a line, name its number and quote the line |
 
 Install the program once. The plugin runs `factory mcp` from your `PATH`, and
 the graphs are built into it:
@@ -149,6 +186,7 @@ pass rate, median cost and median time for each eval.
 | `internal/executor` | the executor interface, the fake executor, and the Claude Code executor with its check |
 | `internal/sandbox`, `internal/workspace` | the bubblewrap sandbox; the product repo and its worktrees |
 | `internal/server` | HTTP API and the server-sent event stream |
+| `internal/crit` | runs Crit on a copy of a contract and reads its comments |
 | `cmd/factory` | `serve`, `start`, `eval`, `validate`, `standards` |
 | `cmd/gen-ts` | writes `ui/src/gen/events.ts` from the Go types |
 | `cmd/evalgen`, `cmd/phasereview` | eval test authoring and phase reviews, through headless Claude Code (`internal/claude`) |

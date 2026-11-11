@@ -10,6 +10,7 @@ import (
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/brokentari/galvantula/internal/graph"
@@ -40,7 +41,7 @@ var Payloads = map[Type]any{
 	NodeLog:       NodeLogData{},
 	NodeSucceeded: NodeSucceededData{},
 	NodeFailed:    NodeFailedData{},
-	GateWaiting:   nil,
+	GateWaiting:   GateWaitingData{},
 	GateDecided:   GateDecidedData{},
 	RunFinished:   RunFinishedData{},
 }
@@ -85,7 +86,165 @@ type GraphUpdatedData struct {
 }
 
 type NodeSucceededData struct {
-	CostUSD float64 `json:"cost_usd,omitzero"`
+	CostUSD  float64   `json:"cost_usd,omitzero"`
+	Contract *Contract `json:"contract,omitempty"`
+}
+
+const (
+	MaxContractBytes = 64 << 10 // the most of CONTRACT.md that an event holds
+	MaxComments      = 100      // the most comments in one decision
+	MaxCommentBytes  = 4000     // the longest comment body
+	MaxQuoteBytes    = 2000     // the longest quote; the runtime cuts a longer one
+)
+
+// Contract is the architect's CONTRACT.md and the result of the red check.
+type Contract struct {
+	// Markdown is the file as the architect wrote it, with \n line ends.
+	Markdown string `json:"markdown"`
+	// Cut means the file was longer than MaxContractBytes and ends early.
+	Cut bool `json:"cut,omitzero"`
+	// Tests is how many tests ran on the stubs. Red is how many of them failed.
+	Tests int `json:"tests"`
+	Red   int `json:"red"`
+	// Unclear is the section on unclear spec. It is zero if the contract has none.
+	Unclear LineRange `json:"unclear,omitzero"`
+}
+
+// LineRange is a range of lines of the contract. Lines count from 1, and both ends are in the range.
+type LineRange struct {
+	Line    int `json:"line"`
+	EndLine int `json:"end_line"`
+}
+
+// GateBrief is what a person must judge at a gate and what Approve does.
+// The runtime writes it, so no reader repeats a rule.
+type GateBrief struct {
+	// Round counts the times this gate has waited, from 1.
+	Round int `json:"round"`
+	// Check says what to judge: one sentence for each item, the most important first.
+	Check []string `json:"check"`
+	// Approve says what Approve commits, beyond the nodes it starts. It can be empty.
+	Approve string `json:"approve"`
+	// Contract is set at a gate that waits for a node with a contract.
+	Contract *Contract `json:"contract,omitempty"`
+	// Changes compares Contract with the one the person sent back. It is set from round 2.
+	Changes *ContractChanges `json:"changes,omitempty"`
+	// Tasks is set at a gate that waits for a plan node.
+	Tasks []TaskRow `json:"tasks,omitempty"`
+}
+
+type ContractChanges struct {
+	// Added lists the lines of this contract that the last one did not have.
+	Added []int `json:"added"`
+	// Removed lists the lines of the last contract that this one does not have.
+	Removed []RemovedLine `json:"removed"`
+	// Earlier holds each comment the person sent back, and where its lines are now.
+	Earlier []EarlierComment `json:"earlier"`
+}
+
+type RemovedLine struct {
+	// After is the line of this contract that the removed line came after. 0 means before line 1.
+	After int    `json:"after"`
+	Text  string `json:"text"`
+}
+
+type EarlierComment struct {
+	// Line is where the quoted lines start in this contract. 0 means they are
+	// gone: the architect changed or removed them.
+	Line    int    `json:"line"`
+	WasLine int    `json:"was_line"`
+	Quote   string `json:"quote"`
+	Body    string `json:"body"`
+}
+
+type TaskRow struct {
+	ID    string `json:"id"`
+	Title string `json:"title,omitempty"`
+	// Owns lists the package directories the task may write in.
+	Owns []string `json:"owns"`
+	// After lists the tasks it waits for. Empty means it starts at once.
+	After   []string `json:"after"`
+	Retries int      `json:"retries"`
+	// CapUSD is the most the task may spend if it uses every retry. 0 means no limit.
+	CapUSD float64 `json:"cap_usd"`
+}
+
+// GateComment is a person's comment on lines of the contract.
+type GateComment struct {
+	Line int `json:"line"`
+	// EndLine is the last line. 0 means Line.
+	EndLine int `json:"end_line,omitzero"`
+	// Quote is those lines as the architect wrote them. The runtime sets it
+	// and ignores a value in a request.
+	Quote string `json:"quote,omitempty"`
+	Body  string `json:"body"`
+}
+
+// NewContract builds a Contract from the file's text. It changes \r\n to \n,
+// cuts the text at the last line end at or before MaxContractBytes, and finds Unclear.
+func NewContract(markdown string, tests, red int) Contract {
+	c := Contract{Markdown: strings.ReplaceAll(markdown, "\r\n", "\n"), Tests: tests, Red: red}
+	if len(c.Markdown) > MaxContractBytes {
+		c.Cut = true
+		head := c.Markdown[:MaxContractBytes]
+		if i := strings.LastIndexByte(head, '\n'); i >= 0 {
+			c.Markdown = head[:i+1]
+		} else {
+			c.Markdown = strings.ToValidUTF8(head, "") // shortcut: one line over the limit is cut mid-line
+		}
+	}
+	c.Unclear = findUnclear(c.Lines())
+	return c
+}
+
+// Lines returns the lines of Markdown. A final \n does not start a line.
+func (c Contract) Lines() []string {
+	if c.Markdown == "" {
+		return nil
+	}
+	return strings.Split(strings.TrimSuffix(c.Markdown, "\n"), "\n")
+}
+
+// heading returns the level and text of a markdown heading line, or 0.
+func heading(line string) (int, string) {
+	n := len(line) - len(strings.TrimLeft(line, "#"))
+	if n < 1 || n > 6 || !strings.HasPrefix(line[n:], " ") {
+		return 0, ""
+	}
+	return n, line[n+1:]
+}
+
+func findUnclear(lines []string) LineRange {
+	var r LineRange
+	level, fence := 0, false
+	end := 0 // the last line before the next heading of the same or a higher level
+	for i, l := range lines {
+		t := strings.TrimLeft(l, " ")
+		if strings.HasPrefix(t, "```") || strings.HasPrefix(t, "~~~") {
+			fence = !fence
+		}
+		n, text := heading(l)
+		if fence || n == 0 {
+			continue
+		}
+		if r.Line == 0 && strings.Contains(strings.ToLower(text), "unclear") {
+			r.Line, level = i+1, n
+		} else if r.Line != 0 && n <= level {
+			end = i
+			break
+		}
+	}
+	if r.Line == 0 {
+		return r
+	}
+	if end == 0 {
+		end = len(lines)
+	}
+	for end > r.Line && strings.TrimSpace(lines[end-1]) == "" {
+		end--
+	}
+	r.EndLine = end
+	return r
 }
 
 type NodeLogData struct {
@@ -112,13 +271,50 @@ type NodeFailedData struct {
 	CostUSD   float64 `json:"cost_usd,omitzero"`
 }
 
+// GateWaitingData says what a rejection will do, so no reader repeats the runtime's rules.
+type GateWaitingData struct {
+	// RevisionsLeft is how many more times a rejection with notes sends the
+	// work back to the nodes the gate waits for. At 0, a rejection ends the run.
+	RevisionsLeft int        `json:"revisions_left"`
+	Brief         *GateBrief `json:"brief,omitempty"` // nil in a log from before briefs
+}
+
 type GateDecidedData struct {
 	Approved bool   `json:"approved"`
 	Notes    string `json:"notes,omitempty"`
+	// Comments are in line order. A log from before comments has none.
+	Comments []GateComment `json:"comments,omitempty"`
 	// Revise means the runtime sends a rejection back instead of failing the
 	// run: the gate and the nodes it waits for run again, and the notes are
 	// their feedback. The runtime decides this, so no reader repeats its rules.
 	Revise bool `json:"revise,omitempty"`
+}
+
+// Feedback is the text the nodes before the gate read after a rejection.
+func (d GateDecidedData) Feedback() string {
+	var b strings.Builder
+	b.WriteString("A person rejected your result at the gate.")
+	if strings.TrimSpace(d.Notes) != "" || len(d.Comments) == 0 {
+		b.WriteString(" Their notes: " + d.Notes)
+	}
+	if len(d.Comments) > 0 {
+		b.WriteString("\n\nTheir comments on lines of CONTRACT.md:")
+	}
+	for _, c := range d.Comments {
+		b.WriteString("\n\n")
+		if c.EndLine > c.Line {
+			fmt.Fprintf(&b, "Lines %d-%d:", c.Line, c.EndLine)
+		} else {
+			fmt.Fprintf(&b, "Line %d:", c.Line)
+		}
+		if c.Quote != "" {
+			for l := range strings.SplitSeq(c.Quote, "\n") {
+				b.WriteString("\n> " + l)
+			}
+		}
+		b.WriteString("\n" + c.Body)
+	}
+	return b.String()
 }
 
 type RunStatus string
@@ -179,6 +375,10 @@ type NodeState struct {
 	LastTaskError string // the last failure that was the node's own, the feedback for its retry
 	Revised       bool   // a person sent the node's work back; set until the node starts again
 	CostUSD       float64
+	Contract      *Contract     // an agent: from its last node_succeeded; a send-back clears it
+	Emitted       []string      // a plan node: the ids of the nodes its graph_updated added, in graph order
+	Brief         *GateBrief    // a gate: from its last gate_waiting; a send-back keeps it for the next round
+	Sent          []GateComment // a gate: the comments of its last send-back; gate_waiting clears it
 }
 
 // State is a run as its events describe it.
@@ -263,14 +463,18 @@ func (s *State) Apply(e Event) error {
 			delete(s.Nodes, id)
 		}
 		nodes := make(map[string]*NodeState, len(d.Graph.Nodes))
+		var emitted []string
 		for _, n := range d.Graph.Nodes {
+			if s.Nodes[n.ID] == nil {
+				emitted = append(emitted, n.ID)
+			}
 			nodes[n.ID] = cmp.Or(s.Nodes[n.ID], &NodeState{Status: Pending})
 		}
 		s.Nodes = nodes
 		// A plan node succeeds in the same event that adds its nodes, so a
 		// crash cannot leave one write done and the other missing.
 		if n, ok := s.Nodes[e.Node]; ok {
-			n.Status = Succeeded
+			n.Status, n.Emitted = Succeeded, emitted
 			s.spend(n, d.CostUSD)
 		}
 		return nil
@@ -297,7 +501,7 @@ func (s *State) Apply(e Event) error {
 		if err != nil {
 			return err
 		}
-		n.Status = Succeeded
+		n.Status, n.Contract = Succeeded, d.Contract
 		s.spend(n, d.CostUSD)
 	case NodeFailed:
 		d, err := e.Decode[NodeFailedData]()
@@ -321,7 +525,11 @@ func (s *State) Apply(e Event) error {
 			n.Status = Succeeded
 		}
 	case GateWaiting:
-		n.Status = Waiting
+		d, err := e.Decode[GateWaitingData]()
+		if err != nil {
+			return err
+		}
+		n.Status, n.Brief, n.Sent = Waiting, d.Brief, nil
 	case GateDecided:
 		d, err := e.Decode[GateDecidedData]()
 		if err != nil {
@@ -332,11 +540,11 @@ func (s *State) Apply(e Event) error {
 		case d.Approved:
 		case d.Revise:
 			s.Revisions++
-			n.Status = Pending
+			n.Status, n.Sent = Pending, d.Comments
 			for _, id := range s.gateDeps(e.Node) {
 				if dep := s.Nodes[id]; dep != nil {
 					*dep = NodeState{Status: Pending, Attempt: dep.Attempt, CostUSD: dep.CostUSD, Revised: true,
-						LastTaskError: "A person rejected your result at the gate. Their notes: " + d.Notes}
+						LastTaskError: d.Feedback()}
 				}
 			}
 		default:

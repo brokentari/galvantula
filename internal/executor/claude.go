@@ -270,7 +270,8 @@ func (c Claude) agent(ctx context.Context, repo workspace.Repo, t Task, log func
 		}
 	}
 	log("check")
-	if err := c.check(ctx, repo, wt, t.Node, p, log); err != nil {
+	var red redCounts
+	if err := c.check(ctx, repo, wt, t.Node, p, log, &red); err != nil {
 		return spent, fmt.Errorf("check failed:\n%w", err)
 	}
 	if p.red && !c.SkipOracle {
@@ -288,7 +289,7 @@ func (c Claude) agent(ctx context.Context, repo workspace.Repo, t Task, log func
 	}
 	log("merged into main")
 	if p.after != nil {
-		p.after(repo, log)
+		spent.Contract = p.after(repo, log, red)
 	}
 	return spent, nil
 }
@@ -377,7 +378,7 @@ func hasNUL(path string) (bool, error) {
 
 // check runs the factory's checks on a worktree. Build and test run the
 // agent's code, so they run in the sandbox too, without any credential.
-func (c Claude) check(ctx context.Context, repo workspace.Repo, wt string, node graph.Node, p rolePlan, log func(string)) error {
+func (c Claude) check(ctx context.Context, repo workspace.Repo, wt string, node graph.Node, p rolePlan, log func(string), counts *redCounts) error {
 	var errs []error
 	changed, err := repo.Changed(wt)
 	if err != nil {
@@ -420,7 +421,8 @@ func (c Claude) check(ctx context.Context, repo workspace.Repo, wt string, node 
 	defer cleanup()
 	errs = append(errs, runSteps(ctx, box, baseSteps)...)
 	if p.red {
-		if err := c.red(ctx, box, log); err != nil {
+		var err error
+		if *counts, err = c.red(ctx, box, log); err != nil {
 			errs = append(errs, err)
 		}
 	} else {
@@ -473,21 +475,25 @@ func runSteps(ctx context.Context, box sandbox.Spec, steps [][]string) []error {
 	return errs
 }
 
+// redCounts are the tests that ran on the architect's stubs and how many failed.
+type redCounts struct{ tests, failed int }
+
 // red checks that the architect's tests fail on its stubs. At least minRed
 // of them must fail: a test that passes on a stub tests
 // nothing, and a panic in a stub would hide the tests after it.
-func (c Claude) red(ctx context.Context, box sandbox.Spec, log func(string)) error {
+func (c Claude) red(ctx context.Context, box sandbox.Spec, log func(string)) (redCounts, error) {
 	out, _ := sandbox.Command(ctx, box, "go", "test", "-count=1", "-timeout=2m", "-json", "./...").CombinedOutput()
 	passed, failed, text := gotest.Count(string(out))
 	total := passed + failed
 	log(fmt.Sprintf("%d of %d tests fail on the stubs", failed, total))
+	counts := redCounts{total, failed}
 	switch {
 	case total < minTests:
-		return fmt.Errorf("only %d tests ran on your stubs; at least %d must run. They may not compile, or a stub may panic, which stops the run:\n%s", total, minTests, gotest.Tail(text, 30))
+		return counts, fmt.Errorf("only %d tests ran on your stubs; at least %d must run. They may not compile, or a stub may panic, which stops the run:\n%s", total, minTests, gotest.Tail(text, 30))
 	case float64(failed) < minRed*float64(total):
-		return fmt.Errorf("only %d of %d tests fail on your stubs; at least %.0f%% must. A test that passes on a stub tests nothing, unless doing nothing is correct", failed, total, minRed*100)
+		return counts, fmt.Errorf("only %d of %d tests fail on your stubs; at least %.0f%% must. A test that passes on a stub tests nothing, unless doing nothing is correct", failed, total, minRed*100)
 	}
-	return nil
+	return counts, nil
 }
 
 // verify is the last step: the whole suite with the race detector, on what

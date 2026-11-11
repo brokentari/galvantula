@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/brokentari/galvantula/graphs"
+	"github.com/brokentari/galvantula/internal/crit"
 	"github.com/brokentari/galvantula/internal/event"
 	"github.com/brokentari/galvantula/internal/executor"
 	"github.com/brokentari/galvantula/internal/graph"
@@ -133,7 +134,14 @@ func serve(args []string) error {
 		return err
 	}
 
-	srv := &http.Server{Handler: server.New(store, run, rails, *uiDir)}
+	sessions := crit.Find()
+	if sessions == nil {
+		slog.Info("crit is not on PATH; gates have no Crit button")
+	} else {
+		slog.Info("crit found", "path", sessions.Path())
+		defer sessions.StopAll()
+	}
+	srv := &http.Server{Handler: server.New(store, run, rails, *uiDir, sessions)}
 	defer context.AfterFunc(ctx, func() {
 		shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()

@@ -12,10 +12,12 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/brokentari/galvantula/internal/crit"
 	"github.com/brokentari/galvantula/internal/event"
 	"github.com/brokentari/galvantula/internal/graph"
 	"github.com/brokentari/galvantula/internal/guardrails"
@@ -33,6 +35,7 @@ type server struct {
 	store  *event.Store
 	runner *runner.Runner
 	rails  guardrails.Guardrails
+	crit   *crit.Sessions
 }
 
 // StartRequest is the body of POST /api/runs. Executor is "fake", which
@@ -50,14 +53,15 @@ type StartRequest struct {
 
 // DecideRequest is the body of POST /api/runs/{run}/gates/{node}.
 type DecideRequest struct {
-	Approved bool   `json:"approved"`
-	Notes    string `json:"notes"`
+	Approved bool                `json:"approved"`
+	Notes    string              `json:"notes"`
+	Comments []event.GateComment `json:"comments,omitempty"`
 }
 
 // New returns the API handler. New runs use rails. If uiDir is not empty,
-// it also serves the UI from it.
-func New(store *event.Store, r *runner.Runner, rails guardrails.Guardrails, uiDir string) http.Handler {
-	s := &server{store: store, runner: r, rails: rails}
+// it also serves the UI from it. A nil crit turns the Crit routes off.
+func New(store *event.Store, r *runner.Runner, rails guardrails.Guardrails, uiDir string, crit *crit.Sessions) http.Handler {
+	s := &server{store: store, runner: r, rails: rails, crit: crit}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/runs", s.listRuns)
 	mux.HandleFunc("POST /api/runs", s.startRun)
@@ -65,6 +69,10 @@ func New(store *event.Store, r *runner.Runner, rails guardrails.Guardrails, uiDi
 	mux.HandleFunc("GET /api/runs/{run}/state", s.getState)
 	mux.HandleFunc("GET /api/runs/{run}/logs", s.getLogs)
 	mux.HandleFunc("POST /api/runs/{run}/gates/{node}", s.decide)
+	if crit != nil {
+		mux.HandleFunc("GET /api/runs/{run}/gates/{node}/crit", s.critStatus)
+		mux.HandleFunc("POST /api/runs/{run}/gates/{node}/crit", s.critOpen)
+	}
 	if uiDir != "" {
 		mux.Handle("/", http.FileServer(http.Dir(uiDir)))
 	}
@@ -129,11 +137,89 @@ func (s *server) decide(w http.ResponseWriter, r *http.Request) {
 	if !readJSON(w, r, &req) {
 		return
 	}
-	if err := s.runner.Decide(r.PathValue("run"), r.PathValue("node"), req.Approved, req.Notes); err != nil {
-		http.Error(w, err.Error(), http.StatusConflict)
+	if err := s.runner.Decide(r.PathValue("run"), r.PathValue("node"), req.Approved, req.Notes, req.Comments); err != nil {
+		status := http.StatusConflict
+		if errors.Is(err, runner.ErrInvalid) {
+			status = http.StatusUnprocessableEntity
+		}
+		http.Error(w, err.Error(), status)
 		return
 	}
+	if s.crit != nil {
+		s.crit.Stop(s.gateDir(r.PathValue("run"), r.PathValue("node")))
+	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *server) gateDir(run, node string) string {
+	return filepath.Join(s.runner.Root, run, "crit", node)
+}
+
+// critGate finds the contract of a gate that waits. It answers 404 or 409 and
+// returns false if there is none. The folder names come from the log, not the URL.
+func (s *server) critGate(w http.ResponseWriter, r *http.Request) (gate string, b *event.GateBrief, ok bool) {
+	evs, err := s.store.Events(r.PathValue("run"), 0)
+	if err == nil && len(evs) == 0 {
+		http.Error(w, "no such run", http.StatusNotFound)
+		return "", nil, false
+	}
+	var st *event.State
+	if err == nil {
+		st, err = event.Fold(evs)
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return "", nil, false
+	}
+	n := st.Nodes[r.PathValue("node")]
+	if n == nil || n.Status != event.Waiting || n.Brief == nil || n.Brief.Contract == nil {
+		http.Error(w, "this node is not a gate that waits with a contract", http.StatusConflict)
+		return "", nil, false
+	}
+	return s.gateDir(st.Run, r.PathValue("node")), n.Brief, true
+}
+
+func (s *server) critStatus(w http.ResponseWriter, r *http.Request) {
+	gate, b, ok := s.critGate(w, r)
+	if !ok {
+		return
+	}
+	s.writeCrit(w, gate, b, s.crit.Running(gate))
+}
+
+func (s *server) writeCrit(w http.ResponseWriter, gate string, b *event.GateBrief, url string) {
+	comments, notes, err := crit.Read(crit.ReviewFile(gate, b.Round), len(b.Contract.Lines()))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, CritStatus{URL: url, Comments: comments, Notes: notes})
+}
+
+// critOpen takes no argument: a request that carries one is wrong, and none reaches Crit.
+func (s *server) critOpen(w http.ResponseWriter, r *http.Request) {
+	if r.URL.RawQuery != "" {
+		http.Error(w, "this route takes no query", http.StatusBadRequest)
+		return
+	}
+	var body map[string]any
+	if !readJSON(w, r, &body) {
+		return
+	}
+	if len(body) != 0 {
+		http.Error(w, "the body must be {}", http.StatusBadRequest)
+		return
+	}
+	gate, b, ok := s.critGate(w, r)
+	if !ok {
+		return
+	}
+	url, err := s.crit.Open(gate, b.Round, b.Contract.Markdown)
+	if err != nil {
+		http.Error(w, "crit did not start: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	s.writeCrit(w, gate, b, url)
 }
 
 // streamEvents sends the run's events after Last-Event-ID (or ?after=),

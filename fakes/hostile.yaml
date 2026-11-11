@@ -1,0 +1,86 @@
+# Hostile contract for graphs/factory.yaml: the contract holds markup that must
+# show as text at the gate and run nothing.
+default:
+  duration: 3s
+
+nodes:
+  standards:
+    duration: 2s
+    logs:
+      - render AGENTS.md (ponytail, go 1.27 guidelines, orwell)
+      - write .factory/standards/lock.json
+
+  architect:
+    duration: 6s
+    tests: 12
+    red: 12
+    logs:
+      - read spec.md
+      - write acceptance tests (12)
+      - "contract: 12 tests, 12 fail on the stubs (the full file is CONTRACT.md)"
+    contract: |
+      # Contract
+
+      <img src=x onerror="document.title='pwned'">
+
+      <script>document.title='pwned'</script>
+
+      [open](javascript:document.title='pwned')
+
+      ![pixel](https://example.invalid/pixel.png)
+
+  plan:
+    duration: 4s
+    logs:
+      - split the contract into packages
+      - check write scopes do not overlap
+    emit:
+      - id: pkg-store
+        title: internal/store
+        kind: agent
+        scope: [internal/store]
+        retries: 2
+      - id: pkg-api
+        title: internal/api
+        kind: agent
+        scope: [internal/api]
+        retries: 2
+      - id: cmd-cli
+        title: cmd/cli
+        kind: agent
+        scope: [cmd/cli]
+        retries: 2
+        deps: [pkg-store, pkg-api]
+
+  pkg-store:
+    duration: 7s
+    logs:
+      - implement Store.Put and Store.Get
+      - go test ./internal/store - ok
+      - go fix -diff - clean
+
+  pkg-api:
+    duration: 5s
+    fail_attempts: 1
+    error: "check failed: TestParseQuery/empty_input: got nil error, want ErrEmpty"
+    logs:
+      - implement ParseQuery
+      - go test ./internal/api
+
+  cmd-cli:
+    duration: 5s
+    logs:
+      - wire flags to store and api
+      - go build ./... - ok
+
+  verify:
+    duration: 3s
+    logs:
+      - go test -race ./... - ok
+      - go.mod says go 1.27, no unapproved modules
+
+  review:
+    duration: 4s
+    logs:
+      - "What this change does: a CLI that stores and queries records."
+      - "Looks good. Ship."

@@ -8,10 +8,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
+	"strings"
 	"time"
 
 	"go.yaml.in/yaml/v3"
 
+	"github.com/brokentari/galvantula/internal/event"
 	"github.com/brokentari/galvantula/internal/graph"
 )
 
@@ -55,6 +58,8 @@ type Result struct {
 	// Nodes is the subgraph a plan node emitted. Other kinds leave it empty.
 	Nodes   []graph.Node
 	CostUSD float64
+	// Contract is what an architect wrote, for the gate after it.
+	Contract *event.Contract
 }
 
 // Executor runs tasks. log sends one line to the run's event log.
@@ -96,6 +101,10 @@ type Step struct {
 	Error        string        `yaml:"error"`
 	Emit         []graph.Node  `yaml:"emit"`     // for plan nodes
 	CostUSD      float64       `yaml:"cost_usd"` // what each attempt reports it spent
+	Contract     string        `yaml:"contract"` // CONTRACT.md; a node with one returns a contract
+	Revised      string        `yaml:"revised"`  // CONTRACT.md for an attempt after a send-back
+	Tests        int           `yaml:"tests"`    // tests that ran on the stubs
+	Red          int           `yaml:"red"`      // tests that failed on them
 }
 
 // ParseScript reads a fake script from YAML. Unknown fields are errors.
@@ -119,6 +128,10 @@ func (f Fake) Run(ctx context.Context, t Task, log func(string)) (Result, error)
 		step = f.Script.Default
 	}
 	lines := step.Logs
+	if t.Revision {
+		// Join the lines so the feedback stays one log line.
+		lines = append(slices.Clone(lines), "feedback: "+strings.Join(strings.Fields(t.Feedback), " "))
+	}
 	if len(lines) == 0 {
 		lines = []string{fmt.Sprintf("working on %s", t.Node.ID)}
 	}
@@ -135,7 +148,15 @@ func (f Fake) Run(ctx context.Context, t Task, log func(string)) (Result, error)
 	if t.Attempt <= step.FailAttempts {
 		return Result{CostUSD: step.CostUSD}, errors.New(cmp.Or(step.Error, "fake failure"))
 	}
-	return Result{Nodes: step.Emit, CostUSD: step.CostUSD}, nil
+	res := Result{Nodes: step.Emit, CostUSD: step.CostUSD}
+	if text := step.Contract; text != "" {
+		if t.Revision && step.Revised != "" {
+			text = step.Revised
+		}
+		c := event.NewContract(text, step.Tests, step.Red)
+		res.Contract = &c
+	}
+	return res, nil
 }
 
 // Sleep waits for d, or until ctx ends.

@@ -20,6 +20,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/brokentari/galvantula/internal/event"
 )
 
 // Server answers MCP requests by calling the factory server.
@@ -179,7 +181,7 @@ var tools = []tool{
 		schema(nil, map[string]any{"run": runP})},
 	{"factory_logs", "Show the last log lines of one node, or of every node.",
 		schema(nil, map[string]any{"run": runP, "node": str("The node id. Leave it out for every node."), "tail": map[string]any{"type": "integer", "description": "How many lines, from 1 to 1000. The default is 50."}})},
-	{"factory_approve", "Decide a gate that waits. Reject with notes to send the contract back to the architect, as far as the run's revision limit allows.",
+	{"factory_approve", "Decide a gate that waits. Reject with notes to send the contract back to the architect, as far as the run's revision limit allows. To comment on the contract, name the line number and quote the line in the notes.",
 		schema([]string{"node", "approved"}, map[string]any{"run": runP, "node": str("The gate's node id, such as approve-contract."), "approved": flag("true to approve, false to reject."), "notes": str("Why. Notes are required to send work back.")})},
 }
 
@@ -274,6 +276,7 @@ type snapshot struct {
 	Gates []struct {
 		Node, Title string
 		Context     []string
+		Brief       *event.GateBrief
 	} `json:"gates"`
 }
 
@@ -308,12 +311,75 @@ func (s Server) status(ctx context.Context, raw jsontext.Value) (string, error) 
 		b.WriteByte('\n')
 	}
 	for _, g := range snap.Gates {
-		fmt.Fprintf(&b, "\nWAITING FOR A DECISION: gate %s (%s). Show the user this, ask them, then call factory_approve with node %q.\n", g.Node, g.Title, g.Node)
+		round := ""
+		br := g.Brief
+		hasBrief := br != nil && (br.Contract != nil || len(br.Tasks) > 0)
+		if hasBrief {
+			round = fmt.Sprintf(", round %d", br.Round)
+		}
+		fmt.Fprintf(&b, "\nWAITING FOR A DECISION: gate %s (%s)%s. Show the user this, ask them, then call factory_approve with node %q.\n", g.Node, g.Title, round, g.Node)
+		if hasBrief {
+			writeBrief(&b, br)
+			continue
+		}
 		for _, l := range g.Context {
 			fmt.Fprintf(&b, "  | %s\n", l)
 		}
 	}
 	return b.String(), nil
+}
+
+// writeBrief prints what the person must judge at a gate, from the gate's brief.
+func writeBrief(b *strings.Builder, br *event.GateBrief) {
+	b.WriteString("What to check:\n")
+	for _, c := range br.Check {
+		fmt.Fprintf(b, "- %s\n", c)
+	}
+	if k := br.Contract; k != nil {
+		fmt.Fprintf(b, "%d tests \u00b7 %d fail on the stubs\n", k.Tests, k.Red)
+	}
+	for _, t := range br.Tasks {
+		after := "starts at once"
+		if len(t.After) > 0 {
+			after = "after " + strings.Join(t.After, ", ")
+		}
+		limit := "no limit"
+		if t.CapUSD > 0 {
+			limit = fmt.Sprintf("cost cap $%.2f", t.CapUSD)
+		}
+		fmt.Fprintf(b, "  %s: owns %s; %s; retries: %d; %s\n", t.ID, strings.Join(t.Owns, ", "), after, t.Retries, limit)
+	}
+	if br.Approve != "" {
+		b.WriteString(br.Approve + "\n")
+	}
+	if br.Contract == nil {
+		return
+	}
+	b.WriteString("The contract (CONTRACT.md):\n")
+	for i, l := range br.Contract.Lines() {
+		fmt.Fprintf(b, "%4d  %s\n", i+1, l)
+	}
+	c := br.Changes
+	if c == nil {
+		return
+	}
+	if len(c.Added) > 0 {
+		added := make([]string, len(c.Added))
+		for i, n := range c.Added {
+			added[i] = fmt.Sprint(n)
+		}
+		b.WriteString("Lines the architect added: " + strings.Join(added, ", ") + "\n")
+	}
+	if len(c.Earlier) > 0 {
+		b.WriteString("Comments from the last round:\n")
+	}
+	for _, e := range c.Earlier {
+		now := fmt.Sprintf("now line %d", e.Line)
+		if e.Line == 0 {
+			now = "its lines are gone"
+		}
+		fmt.Fprintf(b, "- was line %d, %s: %s\n", e.WasLine, now, e.Body)
+	}
 }
 
 func firstLine(s string) string {

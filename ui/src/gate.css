@@ -1,0 +1,48 @@
+/* The gate form and the work it asks you to approve. --you marks only "your turn". */
+@media (min-width: 761px) {
+  .body:has(.gate-work), .body:has(.contract), .body:has(.task-table) { grid-template-columns: 1fr minmax(380px, 42%); }
+}
+
+.gate-review { display: flex; flex-direction: column; gap: 12px; }
+.gate-work { display: flex; flex-direction: column; gap: 6px; }
+.gate-work h3 { margin: 0; }
+.gate-work h3 .link { text-transform: none; letter-spacing: 0; }
+.gate-context, .gate-notes { margin: 0; padding: 10px 12px; background: var(--surface); border: 1px solid var(--line); border-radius: 2px; font-size: 12px; white-space: pre-wrap; word-break: break-word; }
+.gate-context { max-height: 50vh; overflow-y: auto; }
+
+.decision-ok { color: var(--ok); }
+.decision-retry { color: var(--retry); }
+.decision-bad { color: var(--bad); }
+
+.gate { display: flex; flex-direction: column; gap: 8px; margin: 0; min-width: 0; padding: 14px 0 0; border: 0; border-top: 1px solid var(--you); }
+.gate label { font-size: 12px; font-weight: 700; }
+.gate textarea { width: 100%; resize: vertical; border: 1px solid var(--line-strong); border-radius: 2px; padding: 6px 8px; background: var(--surface); }
+.gate textarea[aria-invalid="true"] { border-color: var(--bad); }
+.gate .error:empty { display: none; }
+.gate-effects { display: flex; flex-direction: column; gap: 2px; font-size: 12px; color: var(--muted); }
+.gate-buttons { display: flex; gap: 8px; }
+.gate-buttons button { min-height: 44px; padding: 8px 18px; font-size: 13px; }
+.gate-buttons .approve { background: var(--you); border-color: var(--you); color: var(--you-ink); font-weight: 700; }
+.gate-buttons .reject { color: var(--bad); border-color: var(--bad); }
+
+.gate-check { display: flex; flex-direction: column; gap: 6px; }
+.gate-check h3 { margin: 0; }
+.gate-check ul { margin: 0; padding-left: 18px; }
+.gate-counts { margin: 0; color: var(--muted); font-size: 12px; }
+.gate-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.gate-tools a { color: var(--run); }
+.gate-status { margin: 0; font-size: 12px; }
+.gate-status:empty { display: none; }
+.gate-lost { display: flex; flex-direction: column; gap: 6px; }
+.gate-lost h3 { margin: 0; }
+.gate-lost ul { margin: 0; padding-left: 18px; }
+.gate-thread { display: flex; flex-direction: column; gap: 6px; margin: 4px 0 8px 6ch; padding: 8px 10px; background: var(--surface); border: 1px solid var(--line); border-radius: 2px; }
+.gate-thread p { margin: 0; }
+.gate-thread .gate-notes { padding: 4px 8px; }
+.gate-thread .gate-buttons button { min-height: 32px; padding: 4px 12px; }
+.gate-body { white-space: pre-wrap; overflow-wrap: anywhere; }
+.gate-form { border-color: var(--line-strong); }
+.gate-form label { font-size: 12px; font-weight: 700; }
+.gate-form textarea { width: 100%; resize: vertical; border: 1px solid var(--line-strong); border-radius: 2px; padding: 6px 8px; background: var(--surface); }
+.gate-form textarea[aria-invalid="true"] { border-color: var(--bad); }
+.gate-form .error:empty { display: none; }

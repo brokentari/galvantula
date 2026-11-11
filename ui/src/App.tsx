@@ -2,13 +2,47 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { FactoryEvent, RunSummary } from "./gen/events";
 import { GraphView, type Marks } from "./GraphView";
 import { NodePanel } from "./NodePanel";
+import { RunStats } from "./RunStats";
+import { Timeline } from "./Timeline";
+import "./chrome.css";
 import { apply, describe, diffGraphs, fold, type RunView } from "./state";
 import type { Graph } from "./gen/events";
+import { clock } from "./time";
 
 const playStepMs = 350;
+const startCommand = "factory start -fake fakes/factory.yaml graphs/factory.yaml";
+const iconColor = { running: "#6cb6ff", succeeded: "#5fd08f", failed: "#ff8a80" };
 
-function useRuns(): RunSummary[] {
-  const [runs, setRuns] = useState<RunSummary[]>([]);
+function EmptyState() {
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    if (!copied) return;
+    const t = setTimeout(() => setCopied(false), 2000);
+    return () => clearTimeout(t);
+  }, [copied]);
+  return (
+    <div className="empty">
+      <p>No runs yet. Start one:</p>
+      <div className="empty-cmd">
+        <code>{startCommand}</code>
+        <button
+          onClick={() =>
+            navigator.clipboard.writeText(startCommand).then(
+              () => setCopied(true),
+              () => {}, // leave the label as it is
+            )
+          }
+        >
+          {copied ? "Copied" : "Copy"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// useRuns returns undefined until the server has answered once.
+function useRuns(): RunSummary[] | undefined {
+  const [runs, setRuns] = useState<RunSummary[]>();
   useEffect(() => {
     let stop = false;
     const load = async () => {
@@ -61,7 +95,8 @@ function useEvents(runId: string | undefined): Stream {
 }
 
 export function App() {
-  const runs = useRuns();
+  const loaded = useRuns();
+  const runs = loaded ?? [];
   const [chosen, setChosen] = useState(() => location.hash.slice(1));
   const runId = chosen || runs[0]?.id;
   const { events, count, live: liveRun } = useEvents(runId);
@@ -111,6 +146,29 @@ export function App() {
     const ghosts = run.versions[at - 1].graph.nodes.filter((n) => marks[n.id] === "removed");
     return { graph: { ...run.versions[at].graph, nodes: [...run.versions[at].graph.nodes, ...ghosts] }, marks };
   }, [run, version]);
+  const replayEnd = live ? undefined : Date.parse(shown.at(-1)?.at ?? "") || undefined;
+
+  // The tab shows the live run, so a person who replays still sees that a gate waits.
+  const liveWaiting = liveRun ? liveRun.graph.nodes.filter((n) => liveRun.nodes[n.id]?.status === "waiting").map((n) => n.id) : [];
+  const waitingKey = liveWaiting.join(",");
+  const status = liveRun?.status;
+  useEffect(() => {
+    document.title = liveWaiting.length ? `(${liveWaiting.length}) ${liveWaiting[0]} waits · Galvantula` : "Galvantula";
+    const fill = liveWaiting.length ? "#f5d547" : status ? iconColor[status] : "#6cb6ff";
+    const icon = document.querySelector<HTMLLinkElement>('link[rel="icon"]');
+    if (icon) icon.href = `data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='6' fill='%23${fill.slice(1)}'/%3E%3C/svg%3E`;
+  }, [waitingKey, status]);
+
+  // Open a gate once when it starts to wait; the ref keeps a closed panel closed.
+  const seenWaiting = useRef("");
+  useEffect(() => {
+    const was = seenWaiting.current;
+    seenWaiting.current = waitingKey;
+    // A gate that the person has decided gives way to the next one that waits.
+    const free = !selected || (liveRun?.graph.nodes.find((n) => n.id === selected)?.kind === "gate" && liveRun.nodes[selected]?.status !== "waiting");
+    if (live && waitingKey && waitingKey !== was && free) setSelected(waitingKey.split(",")[0]);
+  }, [waitingKey]);
+
   const waiting = run ? run.graph.nodes.filter((n) => run.nodes[n.id]?.status === "waiting") : [];
   const recent = shown.slice(-40).reverse();
 
@@ -127,6 +185,7 @@ export function App() {
           ))}
         </select>
         {run && <span className={`badge status-${run.status}`}>{run.status}</span>}
+        {run && <RunStats run={run} replayEnd={replayEnd} />}
         {run && run.versions.length > 1 && (
           <select value={version ?? ""} onChange={(e) => setVersion(e.target.value ? Number(e.target.value) : null)} aria-label="Graph version">
             <option value="">graph v{run.graphVersion} (latest)</option>
@@ -147,25 +206,21 @@ export function App() {
       <main className="body">
         <div className="canvas">
           {run && graph ? (
-            <GraphView run={run} graph={graph} marks={marks} selected={selected} onSelect={setSelected} />
+            <GraphView run={run} graph={graph} marks={marks} selected={selected} onSelect={setSelected} now={replayEnd} />
           ) : (
-            <div className="empty">
-              <p>No run to show.</p>
-              <p className="muted mono">factory start -fake fakes/factory.yaml graphs/factory.yaml</p>
-            </div>
+            loaded?.length === 0 && <EmptyState />
           )}
         </div>
 
         <aside className="panel">
           {run && selected && run.nodes[selected] ? (
-            <NodePanel key={selected} run={run} id={selected} live={live} onClose={() => setSelected(undefined)} />
+            <NodePanel key={selected} run={run} id={selected} live={live} onSelect={setSelected} onClose={() => setSelected(undefined)} />
           ) : (
             run && (
               <section className="panel-section">
                 <h2>Run {run.id}</h2>
                 <p className="muted">
-                  Graph <span className="mono">{run.graph.name}</span>, version {run.graphVersion}, {run.graph.nodes.length} nodes.
-                  Spent ${run.costUSD.toFixed(2)}.
+                  Graph <span className="mono">{run.graph.name}</span>, version {run.graphVersion}.
                 </p>
                 {run.reason && <p className={run.status === "failed" ? "error" : "muted"}>{run.reason}</p>}
                 <h3>Events</h3>
@@ -173,7 +228,7 @@ export function App() {
                   {recent.map((e) => (
                     <li key={e.seq}>
                       <button className="event" disabled={!e.node} onClick={() => e.node && setSelected(e.node)}>
-                        <span className="seq">{e.seq}</span>
+                        <span className="seq">{clock(Date.parse(e.at) - Date.parse(run.startedAt))}</span>
                         <span className={`etype t-${e.type}`}>{describe(e)}</span>
                       </button>
                     </li>
@@ -196,17 +251,19 @@ export function App() {
         >
           {playing ? "Pause" : "Replay"}
         </button>
-        <input
-          type="range"
-          min={0}
-          max={events.length}
-          value={cursor ?? events.length}
-          onChange={(e) => {
-            setPlaying(false);
-            setCursor(Number(e.target.value));
-          }}
-          aria-label="Event position"
-        />
+        <Timeline events={events} count={count}>
+          <input
+            type="range"
+            min={0}
+            max={events.length}
+            value={cursor ?? events.length}
+            onChange={(e) => {
+              setPlaying(false);
+              setCursor(Number(e.target.value));
+            }}
+            aria-label="Event position"
+          />
+        </Timeline>
         <span className="pos mono">
           {cursor ?? events.length} / {events.length}
         </span>
