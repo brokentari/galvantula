@@ -2,12 +2,14 @@ package executor
 
 import (
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 
+	"github.com/brokentari/galvantula/internal/event"
 	"github.com/brokentari/galvantula/internal/graph"
 	"github.com/brokentari/galvantula/internal/guardrails"
 	"github.com/brokentari/galvantula/internal/review"
@@ -45,8 +47,9 @@ type rolePlan struct {
 	report func(c Claude, repo workspace.Repo, t Task, text string, log func(string)) ([]graph.Node, error)
 	// skip returns a reason to skip the node without running an agent.
 	skip func(repo workspace.Repo) string
-	// after runs when the work is merged. It reports to the run's log.
-	after func(repo workspace.Repo, log func(string))
+	// after runs when the work is merged. It reports to the run's log. It may
+	// return the contract that the gate after the node shows.
+	after func(repo workspace.Repo, log func(string), red redCounts) *event.Contract
 }
 
 // ConciseStyle is the instruction that guardrails.yaml's concise_output adds
@@ -74,7 +77,7 @@ const architectTemplate = `Design the program that spec.md describes, in this di
 Write these files:
 - The packages, types and function signatures of the program. Each function body is a stub that compiles and returns zero values or an error such as errors.New("not implemented"). A stub must never panic: a panic stops the test run, so the other tests cannot run.
 - Acceptance tests (_test.go files) for every behavior that spec.md states. Test through the program's interface. For a command, put its logic in a function that main calls, such as run(args, stdin, stdout, stderr) int, and test that function. Where the spec fixes the output, check it exactly.
-- CONTRACT.md: the packages and their interfaces, what the tests check, and each place where spec.md is unclear, with the choice your tests make. A person reads this file to approve the contract, so keep it short and plain.
+- CONTRACT.md. A person reads this file to approve the contract, so keep it short and plain. Start it with a section headed "## Unclear in the spec": one list item for each place where spec.md is unclear, with the choice your tests make. Write "Nothing." there if spec.md leaves nothing open. After it, give the packages and their interfaces, and what the tests check.
 
 Rules for the tests:
 - A builder will implement the stubs, and may not change your tests. Test what the spec says, and nothing it leaves open.
@@ -150,7 +153,7 @@ var plans = map[string]rolePlan{
 		tools: tools, allow: allow, mode: "acceptEdits",
 		red:   true,
 		needs: []string{"CONTRACT.md"},
-		after: logContract,
+		after: readContract,
 	},
 	"implementer": {
 		model:    func(m guardrails.Models) guardrails.Role { return m.Implementer },
@@ -227,19 +230,27 @@ func nothingToFix(repo workspace.Repo) string {
 	return ""
 }
 
-// logContract shows the contract in the run's log, so a person can read it
-// at the approval gate without opening the repo.
-func logContract(repo workspace.Repo, log func(string)) {
-	data, err := os.ReadFile(filepath.Join(repo.Dir, "CONTRACT.md"))
+// readContract logs one line about the contract and returns it for the gate.
+// The file is the architect's, so it must be a regular file: a link could
+// point at /dev/zero or at a file outside the repo.
+func readContract(repo workspace.Repo, log func(string), red redCounts) *event.Contract {
+	path := filepath.Join(repo.Dir, "CONTRACT.md")
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() {
+		return nil
+	}
+	f, err := os.Open(path)
 	if err != nil {
-		return
+		return nil
 	}
-	log("contract (the full file is " + filepath.Join(repo.Dir, "CONTRACT.md") + "):")
-	for line := range strings.Lines(string(data)) {
-		if line = strings.TrimRight(line, "\n"); line != "" {
-			log("  " + line)
-		}
+	defer f.Close()
+	data, err := io.ReadAll(io.LimitReader(f, event.MaxContractBytes+1))
+	if err != nil {
+		return nil
 	}
+	log(fmt.Sprintf("contract: %d tests, %d fail on the stubs (the full file is %s)", red.tests, red.failed, path))
+	c := event.NewContract(string(data), red.tests, red.failed)
+	return &c
 }
 
 // noLinks fails if dir holds a symbolic link. The runtime reads and writes

@@ -1,4 +1,4 @@
-import type { FactoryEvent, FailureClass, Graph, NodeStatus, RunStatus } from "./gen/events";
+import type { FactoryEvent, FailureClass, GateBrief, GateDecidedData, Graph, NodeStatus, RunStatus } from "./gen/events";
 
 export interface NodeView {
   status: NodeStatus;
@@ -8,6 +8,11 @@ export interface NodeView {
   lastError?: string;
   costUSD: number;
   logs: string[];
+  startedAt?: string; // `at` of the last node_started
+  endedAt?: string; // `at` of the last node_succeeded, node_failed or gate_decided
+  revisionsLeft?: number; // from gate_waiting; undefined for an old log
+  brief?: GateBrief; // from gate_waiting; undefined for an old log
+  decision?: GateDecidedData & { at: string }; // from gate_decided; cleared by gate_waiting
 }
 
 export interface RunView {
@@ -19,6 +24,9 @@ export interface RunView {
   reason?: string;
   costUSD: number;
   nodes: Record<string, NodeView>;
+  startedAt: string; // `at` of run_created
+  endedAt?: string; // `at` of run_finished
+  budgetUSD?: number; // run_created guardrails.budget.run_usd, if it is more than 0
 }
 
 // GraphVersion is a graph the run had, and why it changed.
@@ -44,8 +52,9 @@ export function fold(events: FactoryEvent[]): RunView | undefined {
 export function apply(run: RunView | undefined, e: FactoryEvent): RunView | undefined {
   if (e.type === "run_created") {
     const nodes = Object.fromEntries(e.data.graph.nodes.map((n) => [n.id, blank()]));
+    const budget = e.data.guardrails?.budget?.run_usd ?? 0;
     const first = { version: 1, graph: e.data.graph, reason: "the graph the run started with", replaced: [] };
-    return { id: e.run, graph: e.data.graph, graphVersion: 1, versions: [first], status: "running", costUSD: 0, nodes };
+    return { id: e.run, graph: e.data.graph, graphVersion: 1, versions: [first], status: "running", costUSD: 0, nodes, startedAt: e.at, budgetUSD: budget > 0 ? budget : undefined };
   }
   if (!run) return run;
   if (e.type === "graph_updated") {
@@ -60,13 +69,13 @@ export function apply(run: RunView | undefined, e: FactoryEvent): RunView | unde
     return { ...run, graph: e.data.graph, graphVersion: version, versions: [...run.versions, next], costUSD: run.costUSD + cost, nodes };
   }
   if (e.type === "run_finished") {
-    return { ...run, status: e.data.status, reason: e.data.reason };
+    return { ...run, status: e.data.status, reason: e.data.reason, endedAt: e.at };
   }
 
   if (e.type === "gate_decided" && e.data.revise && e.node) {
     // The runtime sent the work back: the gate and the nodes it waits for run again.
     const gate = run.graph.nodes.find((g) => g.id === e.node);
-    const nodes = { ...run.nodes, [e.node]: { ...run.nodes[e.node], status: "pending" as const } };
+    const nodes = { ...run.nodes, [e.node]: { ...run.nodes[e.node], status: "pending" as const, endedAt: e.at, decision: { ...e.data, at: e.at } } };
     for (const id of gate?.deps ?? []) {
       if (nodes[id]) nodes[id] = { ...nodes[id], status: "pending", taskFailures: 0, lastError: undefined };
     }
@@ -78,18 +87,19 @@ export function apply(run: RunView | undefined, e: FactoryEvent): RunView | unde
   let next: NodeView;
   switch (e.type) {
     case "node_started":
-      next = { ...n, status: "running", attempt: e.attempt ?? n.attempt, logs: [...n.logs, `── attempt ${e.attempt} ──`] };
+      next = { ...n, status: "running", attempt: e.attempt ?? n.attempt, startedAt: e.at, logs: [...n.logs, `── attempt ${e.attempt} ──`] };
       break;
     case "node_log":
       next = { ...n, logs: [...n.logs, e.data.line].slice(-maxLogLines) };
       break;
     case "node_succeeded":
-      next = { ...n, status: "succeeded", costUSD: n.costUSD + (e.data?.cost_usd ?? 0) };
+      next = { ...n, status: "succeeded", endedAt: e.at, costUSD: n.costUSD + (e.data?.cost_usd ?? 0) };
       break;
     case "node_failed":
       next = {
         ...n,
         status: e.data.will_retry ? "pending" : e.data.abandoned ? "succeeded" : "failed",
+        endedAt: e.at,
         lastError: e.data.error,
         taskFailures: n.taskFailures + (e.data.class === "task" ? 1 : 0),
         infraFailures: n.infraFailures + (e.data.class === "infra" ? 1 : 0),
@@ -98,13 +108,15 @@ export function apply(run: RunView | undefined, e: FactoryEvent): RunView | unde
       };
       break;
     case "gate_waiting":
-      next = { ...n, status: "waiting" };
+      next = { ...n, status: "waiting", revisionsLeft: e.data?.revisions_left, brief: e.data?.brief, decision: undefined };
       break;
-    case "gate_decided":
+    case "gate_decided": {
+      const decision = { ...e.data, at: e.at };
       next = e.data.approved
-        ? { ...n, status: "succeeded" }
-        : { ...n, status: "failed", lastError: `rejected: ${e.data.notes ?? ""}` };
+        ? { ...n, status: "succeeded", endedAt: e.at, decision }
+        : { ...n, status: "failed", endedAt: e.at, decision, lastError: `rejected: ${e.data.notes ?? ""}` };
       break;
+    }
     default:
       return run;
   }
@@ -154,6 +166,7 @@ export function layout(graph: Graph, colWidth = 205, rowHeight = 84): Map<string
   return pos;
 }
 
+const count = (n: number) => (n ? ` (${n} comment${n > 1 ? "s" : ""})` : "");
 const failureKind = (c: FailureClass) => ({ task: "task", infra: "infrastructure", limit: "usage limit" })[c];
 
 export function describe(e: FactoryEvent): string {
@@ -173,7 +186,7 @@ export function describe(e: FactoryEvent): string {
     case "gate_waiting":
       return `${e.node} waits for you`;
     case "gate_decided":
-      return `${e.node} ${e.data.approved ? "approved" : e.data.revise ? "sent back" : "rejected"}${e.data.notes ? `: ${e.data.notes}` : ""}`;
+      return `${e.node} ${e.data.approved ? "approved" : e.data.revise ? "sent back" : "rejected"}${e.data.notes ? `: ${e.data.notes}` : ""}${count(e.data.comments?.length ?? 0)}`;
     case "run_finished":
       return `run ${e.data.status}${e.data.reason ? `: ${e.data.reason}` : ""}`;
   }

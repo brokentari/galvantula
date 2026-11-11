@@ -1,0 +1,66 @@
+/* Graph: React Flow theme, node cards, status marks. Colors come from the tokens in styles.css. */
+.react-flow {
+  --xy-background-color: var(--bg);
+  --xy-edge-stroke: var(--line);
+  --xy-edge-stroke-width: 1;
+  --xy-controls-button-background-color: var(--surface);
+  --xy-controls-button-background-color-hover: var(--line);
+  --xy-controls-button-color: var(--ink);
+  --xy-controls-button-color-hover: var(--ink);
+  --xy-controls-button-border-color: var(--line-strong);
+  --xy-attribution-background-color: transparent;
+  --xy-minimap-background-color: var(--surface);
+  --xy-minimap-mask-background-color: rgb(14 17 22 / 70%);
+  --xy-minimap-node-background-color: var(--line-strong);
+}
+.react-flow__minimap { border: 1px solid var(--line); border-radius: 2px; }
+.react-flow__attribution a { color: var(--muted); }
+.react-flow__edge.edge-done path { stroke: var(--muted); }
+.react-flow__edge.animated path { stroke: var(--run); }
+.react-flow__edge.edge-review path { stroke: var(--you); }
+.react-flow__handle { opacity: 0; }
+
+.card { width: 172px; padding: 7px 11px; border: 1px dashed var(--line-strong); border-radius: 2px; cursor: pointer; }
+.card.selected { outline: 1px solid var(--ink); outline-offset: 3px; }
+.card-id { font-size: 12px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.card-title { color: var(--muted); font-size: 11px; line-height: 1.35; margin-top: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.card-meta { display: flex; align-items: center; gap: 6px; margin-top: 4px; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+/* The status mark: a shape for each status, so color is not the only sign. */
+.dot { position: relative; width: 8px; height: 8px; flex: none; border: 1px solid currentColor; border-radius: 50%; }
+.status-running .dot, .status-succeeded .dot { background: currentColor; }
+.status-waiting .dot { background: currentColor; border-radius: 0; }
+.status-failed .dot { border: 0; border-radius: 0; }
+.status-failed .dot::before, .status-failed .dot::after { content: ""; position: absolute; left: -1px; top: 50%; width: 10px; height: 1px; background: currentColor; transform: rotate(45deg); }
+.status-failed .dot::after { transform: rotate(-45deg); }
+
+.card.mark-added { outline: 1px solid var(--ok); outline-offset: 3px; }
+.card.mark-changed { outline: 1px solid var(--retry); outline-offset: 3px; }
+.card.mark-removed { border-style: dashed; opacity: 0.55; text-decoration: line-through; outline: 1px solid var(--bad); outline-offset: 3px; }
+
+/* Under review: the nodes a waiting gate asks the person to approve. Dashed, so it differs from the gate's solid fill. */
+.card.review { outline: 1px dashed var(--you); outline-offset: 3px; }
+.card.dim { opacity: 0.45; }
+
+.card.status-running { border-style: solid; border-color: var(--run); }
+.card.status-running .card-meta { color: var(--run); }
+.card.status-waiting { border-style: solid; border-color: var(--you); background: var(--you); color: var(--you-ink); }
+.card.status-waiting .card-title, .card.status-waiting .card-meta { color: var(--you-ink); }
+.card.status-succeeded { border-style: solid; border-color: var(--ok); }
+.card.status-succeeded .card-meta { color: var(--ok); }
+.card.status-failed { border-style: solid; border-color: var(--bad); }
+.card.status-failed .card-meta { color: var(--bad); }
+
+/* One keyframes name for each status, so the flash replays when the class changes. */
+@media (prefers-reduced-motion: no-preference) {
+  .card.status-running { animation: flash-running 400ms ease-out; }
+  .card.status-waiting { animation: flash-waiting 400ms ease-out; }
+  .card.status-succeeded { animation: flash-succeeded 400ms ease-out; }
+  .card.status-failed { animation: flash-failed 400ms ease-out; }
+  .card.status-running .dot { animation: pulse 1s ease-in-out infinite; }
+}
+@keyframes flash-running { from { border-color: var(--ink); } }
+@keyframes flash-waiting { from { border-color: var(--ink); } }
+@keyframes flash-succeeded { from { border-color: var(--ink); } }
+@keyframes flash-failed { from { border-color: var(--ink); } }
+@keyframes pulse { 50% { opacity: 0.3; } }

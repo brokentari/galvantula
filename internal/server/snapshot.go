@@ -37,9 +37,20 @@ type NodeSnapshot struct {
 // GateSnapshot is a gate that waits for a person. Context is what the nodes
 // before it logged: the contract, or the list of tasks and their cost.
 type GateSnapshot struct {
-	Node    string   `json:"node"`
-	Title   string   `json:"title,omitempty"`
-	Context []string `json:"context"`
+	Node    string           `json:"node"`
+	Title   string           `json:"title,omitempty"`
+	Context []string         `json:"context"`
+	Brief   *event.GateBrief `json:"brief,omitempty"`
+}
+
+// CritStatus is the answer of the Crit routes.
+type CritStatus struct {
+	// URL is where Crit shows the contract. It is empty when Crit is not open.
+	URL string `json:"url,omitempty"`
+	// Comments are the open line comments in Crit's review file.
+	Comments []event.GateComment `json:"comments,omitempty"`
+	// Notes holds Crit's comments that name no line of this contract.
+	Notes string `json:"notes,omitempty"`
 }
 
 // maxGateContext caps the lines of a gate's context.
@@ -60,7 +71,7 @@ func snapshot(evs []event.Event) (Snapshot, error) {
 		ns := st.Nodes[n.ID]
 		snap.Nodes = append(snap.Nodes, NodeSnapshot{ID: n.ID, Title: n.Title, Kind: string(n.Kind), Status: ns.Status, Attempt: ns.Attempt, LastError: ns.LastError})
 		if ns.Status == event.Waiting {
-			snap.Gates = append(snap.Gates, GateSnapshot{Node: n.ID, Title: n.Title, Context: latestLines(evs, n.Deps, maxGateContext)})
+			snap.Gates = append(snap.Gates, GateSnapshot{Node: n.ID, Title: n.Title, Context: latestLines(evs, n.Deps, maxGateContext), Brief: ns.Brief})
 		}
 	}
 	return snap, nil

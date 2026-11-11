@@ -177,3 +177,50 @@ func TestToolErrorsReachTheModel(t *testing.T) {
 		t.Errorf("unknown tool: %v", got)
 	}
 }
+
+func TestStatusPrintsTheBrief(t *testing.T) {
+	const head = `{"id":"r-1","graph":"phase4","status":"running","gates":[`
+	for name, c := range map[string]struct {
+		gate string
+		want []string
+		not  []string
+	}{
+		"contract round 2": {
+			`{"node":"approve-contract","title":"Approve the contract","context":["old line"],"brief":{"round":2,"check":["Check A.","Check B."],"approve":"Approve locks these tests.",
+				"contract":{"markdown":"# C\nline two\nline three\n","tests":12,"red":12},
+				"changes":{"added":[2,3],"removed":[],"earlier":[{"line":3,"was_line":5,"body":"fix it"},{"line":0,"was_line":9,"body":"gone now"}]}}}`,
+			[]string{"(Approve the contract), round 2. Show", "What to check:\n- Check A.\n- Check B.\n12 tests \u00b7 12 fail on the stubs\nApprove locks these tests.\nThe contract (CONTRACT.md):\n   1  # C\n   2  line two\n   3  line three\n",
+				"Lines the architect added: 2, 3\nComments from the last round:\n- was line 5, now line 3: fix it\n- was line 9, its lines are gone: gone now\n"},
+			[]string{"old line"},
+		},
+		"tasks": {
+			`{"node":"approve-tasks","title":"Approve the tasks","brief":{"round":1,"check":["Check tasks."],"approve":"Each attempt may spend up to $3.00.",
+				"tasks":[{"id":"a","owns":["pkg/a","pkg/b"],"after":[],"retries":1,"cap_usd":6},{"id":"b","owns":["cmd"],"after":["a"],"retries":0,"cap_usd":0}]}}`,
+			[]string{", round 1.", "- Check tasks.\n", "  a: owns pkg/a, pkg/b; starts at once; retries: 1; cost cap $6.00\n", "  b: owns cmd; after a; retries: 0; no limit\n", "Each attempt may spend up to $3.00.\n"},
+			[]string{"The contract (CONTRACT.md)"},
+		},
+		"no brief":   {`{"node":"g","title":"T","context":["ctx one"]}`, []string{"(T). Show the user", "  | ctx one\n"}, []string{"round", "What to check"}},
+		"round only": {`{"node":"g","title":"T","context":["ctx one"],"brief":{"round":2,"check":[]}}`, []string{"  | ctx one\n"}, []string{"round", "What to check"}},
+	} {
+		f := &fakeFactory{posts: map[string]string{}}
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/api/runs/r-1/state" {
+				io.WriteString(w, head+c.gate+`]}`)
+				return
+			}
+			f.ServeHTTP(w, r)
+		}))
+		got, _ := text(t, talk(t, Server{API: srv.URL}, call(1, "factory_status", `{"run":"r-1"}`))[0])
+		srv.Close()
+		for _, w := range c.want {
+			if !strings.Contains(got, w) {
+				t.Errorf("%s: lacks %q:\n%s", name, w, got)
+			}
+		}
+		for _, n := range c.not {
+			if strings.Contains(got, n) {
+				t.Errorf("%s: has %q:\n%s", name, n, got)
+			}
+		}
+	}
+}

@@ -68,6 +68,7 @@ type decision struct {
 	node     string
 	approved bool
 	notes    string
+	comments []event.GateComment
 	reply    chan error
 }
 
@@ -185,14 +186,14 @@ func (r *Runner) ResumeAll() error {
 func (r *Runner) Wait() { r.wg.Wait() }
 
 // Decide records a human decision on a gate that is waiting.
-func (r *Runner) Decide(run, node string, approved bool, notes string) error {
+func (r *Runner) Decide(run, node string, approved bool, notes string, comments []event.GateComment) error {
 	r.mu.Lock()
 	a := r.runs[run]
 	r.mu.Unlock()
 	if a == nil {
 		return fmt.Errorf("run %s is not active", run)
 	}
-	d := decision{node: node, approved: approved, notes: notes, reply: make(chan error, 1)}
+	d := decision{node: node, approved: approved, notes: notes, comments: comments, reply: make(chan error, 1)}
 	select {
 	case a.decisions <- d:
 		return <-d.reply
@@ -286,7 +287,7 @@ func (r *Runner) drive(id string, a *active) error {
 			for _, n := range ready(st) {
 				switch n.Kind {
 				case graph.Gate:
-					if err := emit(event.New(id, event.GateWaiting, n.ID, 0, nil)); err != nil {
+					if err := emit(event.New(id, event.GateWaiting, n.ID, 0, event.GateWaitingData{RevisionsLeft: revisionsLeft(st, n.ID), Brief: gateBrief(st, n.ID)})); err != nil {
 						return err
 					}
 					if st.AutoApprove {
@@ -389,7 +390,7 @@ func (r *Runner) complete(st *event.State, emit func(event.Event) error, o outco
 		o.err = fmt.Errorf("plan output rejected: %w", err)
 	}
 	if o.err == nil {
-		return emit(event.New(st.Run, event.NodeSucceeded, o.node.ID, o.attempt, event.NodeSucceededData{CostUSD: o.res.CostUSD}))
+		return emit(event.New(st.Run, event.NodeSucceeded, o.node.ID, o.attempt, event.NodeSucceededData{CostUSD: o.res.CostUSD, Contract: o.res.Contract}))
 	}
 	return r.fail(st, emit, o.node, o.attempt, o.err, o.res.CostUSD)
 }
@@ -416,9 +417,17 @@ func decide(st *event.State, emit func(event.Event) error, d decision) error {
 	if ns, ok := st.Nodes[d.node]; !ok || ns.Status != event.Waiting {
 		return fmt.Errorf("node %s is not a waiting gate", d.node)
 	}
-	data := event.GateDecidedData{Approved: d.approved, Notes: d.notes}
-	// Notes are what the node needs to do better, so a rejection without them ends the run.
-	data.Revise = !d.approved && strings.TrimSpace(d.notes) != "" && st.Revisions < st.Rails.Budget.Revisions && revisable(st, d.node)
+	var contract *event.Contract
+	if b := st.Nodes[d.node].Brief; b != nil {
+		contract = b.Contract
+	}
+	comments, err := checkComments(d.comments, contract)
+	if err != nil {
+		return err
+	}
+	data := event.GateDecidedData{Approved: d.approved, Notes: d.notes, Comments: comments}
+	// A rejection needs notes or a comment to say what to change, or it ends the run.
+	data.Revise = !d.approved && (strings.TrimSpace(d.notes) != "" || len(comments) > 0) && revisionsLeft(st, d.node) > 0
 	return emit(event.New(st.Run, event.GateDecided, d.node, 0, data))
 }
 
@@ -544,6 +553,14 @@ func replanBrief(st *event.State) *executor.Replan {
 		}
 	}
 	return b
+}
+
+// revisionsLeft is how many more rejections with notes can send a gate's work back.
+func revisionsLeft(st *event.State, gate string) int {
+	if !revisable(st, gate) {
+		return 0
+	}
+	return max(st.Rails.Budget.Revisions-st.Revisions, 0)
 }
 
 // revisable reports whether a gate waits only for agent nodes, which a

@@ -8,19 +8,76 @@ export interface Budget {
   revisions: number;
 }
 
+export interface Contract {
+  markdown: string;
+  cut?: boolean;
+  tests: number;
+  red: number;
+  unclear?: LineRange;
+}
+
+export interface ContractChanges {
+  added: number[];
+  removed: RemovedLine[];
+  earlier: EarlierComment[];
+}
+
+export interface CritStatus {
+  url?: string;
+  comments?: GateComment[];
+  notes?: string;
+}
+
 export interface DecideRequest {
   approved: boolean;
   notes: string;
+  comments?: GateComment[];
+}
+
+export interface EarlierComment {
+  line: number;
+  was_line: number;
+  quote: string;
+  body: string;
 }
 
 export type EventType = "gate_decided" | "gate_waiting" | "graph_updated" | "node_failed" | "node_log" | "node_started" | "node_succeeded" | "run_created" | "run_finished";
 
 export type FailureClass = "task" | "infra" | "limit";
 
+export interface GateBrief {
+  round: number;
+  check: string[];
+  approve: string;
+  contract?: Contract;
+  changes?: ContractChanges;
+  tasks?: TaskRow[];
+}
+
+export interface GateComment {
+  line: number;
+  end_line?: number;
+  quote?: string;
+  body: string;
+}
+
 export interface GateDecidedData {
   approved: boolean;
   notes?: string;
+  comments?: GateComment[];
   revise?: boolean;
+}
+
+export interface GateSnapshot {
+  node: string;
+  title?: string;
+  context: string[];
+  brief?: GateBrief;
+}
+
+export interface GateWaitingData {
+  revisions_left: number;
+  brief?: GateBrief;
 }
 
 export interface GoTarget {
@@ -61,6 +118,11 @@ export interface Guardrails {
 
 export type Kind = "agent" | "tool" | "gate" | "merge" | "plan" | "slot";
 
+export interface LineRange {
+  line: number;
+  end_line: number;
+}
+
 export interface LogEvent {
   seq: number;
   run: string;
@@ -91,10 +153,25 @@ export interface NodeLogData {
   line: string;
 }
 
+export interface NodeSnapshot {
+  id: string;
+  title?: string;
+  kind: string;
+  status: NodeStatus;
+  attempt?: number;
+  last_error?: string;
+}
+
 export type NodeStatus = "pending" | "running" | "waiting" | "succeeded" | "failed";
 
 export interface NodeSucceededData {
   cost_usd?: number;
+  contract?: Contract;
+}
+
+export interface RemovedLine {
+  after: number;
+  text: string;
 }
 
 export interface Role {
@@ -127,9 +204,31 @@ export interface RunSummary {
   status: RunStatus;
 }
 
+export interface Snapshot {
+  id: string;
+  graph: string;
+  status: RunStatus;
+  reason?: string;
+  cost_usd: number;
+  graph_version: number;
+  replans: number;
+  revisions: number;
+  nodes: NodeSnapshot[];
+  gates?: GateSnapshot[];
+}
+
+export interface TaskRow {
+  id: string;
+  title?: string;
+  owns: string[];
+  after: string[];
+  retries: number;
+  cap_usd: number;
+}
+
 export type FactoryEvent = Omit<LogEvent, "type" | "data"> & (
   | { type: "gate_decided"; data: GateDecidedData }
-  | { type: "gate_waiting"; data?: undefined }
+  | { type: "gate_waiting"; data: GateWaitingData }
   | { type: "graph_updated"; data: GraphUpdatedData }
   | { type: "node_failed"; data: NodeFailedData }
   | { type: "node_log"; data: NodeLogData }

@@ -106,10 +106,10 @@ func TestFactoryDemoRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitUntil(t, store, run, "the contract gate waits", nodeIs("approve-contract", event.Waiting))
-	if err := r.Decide(run, "architect", true, ""); err == nil {
+	if err := r.Decide(run, "architect", true, "", nil); err == nil {
 		t.Error("Decide accepted a node that is not a waiting gate")
 	}
-	if err := r.Decide(run, "approve-contract", true, ""); err != nil {
+	if err := r.Decide(run, "approve-contract", true, "", nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -122,7 +122,7 @@ func TestFactoryDemoRun(t *testing.T) {
 	if _, ok := st.Graph.Node("tasks"); ok {
 		t.Error("the tasks slot is still in the graph")
 	}
-	if err := r.Decide(run, "approve-tasks", true, "looks right"); err != nil {
+	if err := r.Decide(run, "approve-tasks", true, "looks right", nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -245,7 +245,7 @@ func TestRunFails(t *testing.T) {
 			}
 			if tt.reject != "" {
 				waitUntil(t, store, run, "the gate waits", nodeIs(tt.reject, event.Waiting))
-				if err := r.Decide(run, tt.reject, false, "wrong interfaces"); err != nil {
+				if err := r.Decide(run, tt.reject, false, "wrong interfaces", nil); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -760,13 +760,13 @@ func startRevise(t *testing.T, revisions int, x *tasks) (*Runner, *event.Store, 
 func TestRejectionWithNotesSendsWorkBack(t *testing.T) {
 	x := &tasks{}
 	r, store, id := startRevise(t, 1, x)
-	if err := r.Decide(id, "g", false, "split the parser out"); err != nil {
+	if err := r.Decide(id, "g", false, "split the parser out", nil); err != nil {
 		t.Fatal(err)
 	}
 	waitUntil(t, store, id, "the gate waits again", func(st *event.State, _ []event.Event) bool {
 		return st.Revisions == 1 && st.Nodes["g"].Status == event.Waiting && st.Nodes["a"].Attempt == 2
 	})
-	if err := r.Decide(id, "g", true, ""); err != nil {
+	if err := r.Decide(id, "g", true, "", nil); err != nil {
 		t.Fatal(err)
 	}
 	st, _ := waitUntil(t, store, id, "the run finishes", runDone)
@@ -786,6 +786,47 @@ func TestRejectionWithNotesSendsWorkBack(t *testing.T) {
 	}
 }
 
+// gate_waiting says how many revisions are left: the budget after an agent,
+// one less after a send-back, and 0 after a tool node, which a rejection cannot send back.
+func TestGateWaitingSaysRevisionsLeft(t *testing.T) {
+	left := func(evs []event.Event) []int {
+		var out []int
+		for _, e := range evs {
+			if e.Type == event.GateWaiting {
+				d, err := e.Decode[event.GateWaitingData]()
+				if err != nil {
+					t.Fatal(err)
+				}
+				out = append(out, d.RevisionsLeft)
+			}
+		}
+		return out
+	}
+	r, store, id := startRevise(t, 2, &tasks{})
+	if err := r.Decide(id, "g", false, "split the parser out", nil); err != nil {
+		t.Fatal(err)
+	}
+	_, evs := waitUntil(t, store, id, "the gate waits again", func(st *event.State, _ []event.Event) bool {
+		return st.Revisions == 1 && st.Nodes["g"].Status == event.Waiting
+	})
+	if got := left(evs); !slices.Equal(got, []int{2, 1}) {
+		t.Errorf("after an agent node, revisions left %v, want [2 1]", got)
+	}
+
+	store = openStore(t)
+	r = New(t.Context(), store, 3)
+	r.Executor = func(*event.State) (executor.Executor, error) { return &tasks{}, nil }
+	rails := guardrails.Guardrails{Budget: guardrails.Budget{Revisions: 2}}
+	id, err := r.Start(Run{Graph: mustParse(t, "name: g\nnodes:\n  - {id: a, kind: tool}\n  - {id: g, kind: gate, deps: [a]}"), Executor: "fake", Rails: rails})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, evs = waitUntil(t, store, id, "the gate waits", nodeIs("g", event.Waiting))
+	if got := left(evs); !slices.Equal(got, []int{0}) {
+		t.Errorf("after a tool node, revisions left %v, want [0]", got)
+	}
+}
+
 // Without notes, or past the limit, a rejection ends the run.
 func TestRejectionEndsTheRun(t *testing.T) {
 	for name, tt := range map[string]struct {
@@ -794,7 +835,7 @@ func TestRejectionEndsTheRun(t *testing.T) {
 	}{"no notes": {1, " "}, "no revisions left": {0, "try again"}} {
 		t.Run(name, func(t *testing.T) {
 			r, store, id := startRevise(t, tt.revisions, &tasks{})
-			if err := r.Decide(id, "g", false, tt.notes); err != nil {
+			if err := r.Decide(id, "g", false, tt.notes, nil); err != nil {
 				t.Fatal(err)
 			}
 			st, _ := waitUntil(t, store, id, "the run finishes", runDone)

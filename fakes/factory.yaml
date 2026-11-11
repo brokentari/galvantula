@@ -1,5 +1,6 @@
-# Fake behavior for graphs/factory.yaml. It shows parallel work (store and api run
-# at the same time), a retry (api fails once), and both gates.
+# Fake behavior for graphs/factory.yaml. It shows the contract gate with a real
+# contract, a send-back round (the architect writes a revised contract), parallel
+# work (store and api run at the same time), a retry (api fails once), and both gates.
 default:
   duration: 3s
 
@@ -12,12 +13,68 @@ nodes:
 
   architect:
     duration: 6s
+    tests: 12
+    red: 12
     logs:
       - read spec.md
-      - write internal/store/store.go interfaces
-      - write internal/api/api.go interfaces
       - write acceptance tests (12)
-      - red before green - 12 of 12 fail on stubs
+      - "contract: 12 tests, 12 fail on the stubs (the full file is CONTRACT.md)"
+    contract: |
+      # Contract: records CLI
+
+      ## Unclear in the spec
+
+      - **Empty query.** The spec does not say what `query ""` returns. The tests expect `ErrEmpty`.
+      - **Key case.** The spec does not say if keys are case-sensitive. The tests treat `A` and `a` as two keys.
+      - **Missing key.** `get` of a key that is not stored: the tests expect exit code 1 and `not found` on stderr.
+
+      ## Packages and interfaces
+
+      | Package | What it does |
+      |---|---|
+      | `internal/store` | `Put(key, value string) error` and `Get(key string) (string, error)` |
+      | `internal/api` | `ParseQuery(q string) (Query, error)` |
+      | `cmd/cli` | `run(args []string, stdin io.Reader, stdout, stderr io.Writer) int` |
+
+      ## What the tests check
+
+      12 tests. Each one fails on the stubs.
+
+      1. `TestPutGet`: a stored record comes back.
+      2. `TestGetMissing`: a missing key gives `ErrNotFound`.
+      3. `TestParseQuery/empty_input`: an empty query gives `ErrEmpty`.
+
+      ```go
+      func ParseQuery(q string) (Query, error)
+      ```
+    revised: |
+      # Contract: records CLI
+
+      ## Unclear in the spec
+
+      - **Empty query.** An empty query returns every record. The tests expect no error.
+      - **Key case.** The spec does not say if keys are case-sensitive. The tests treat `A` and `a` as two keys.
+      - **Missing key.** `get` of a key that is not stored: the tests expect exit code 1 and `not found` on stderr.
+
+      ## Packages and interfaces
+
+      | Package | What it does |
+      |---|---|
+      | `internal/store` | `Put(key, value string) error` and `Get(key string) (string, error)` |
+      | `internal/api` | `ParseQuery(q string) (Query, error)` |
+      | `cmd/cli` | `run(args []string, stdin io.Reader, stdout, stderr io.Writer) int` |
+
+      ## What the tests check
+
+      12 tests. Each one fails on the stubs.
+
+      1. `TestPutGet`: a stored record comes back.
+      2. `TestGetMissing`: a missing key gives `ErrNotFound`.
+      3. `TestParseQuery/empty_input`: an empty query matches every record.
+
+      ```go
+      func ParseQuery(q string) (Query, error)
+      ```
 
   plan:
     duration: 4s
@@ -28,14 +85,17 @@ nodes:
       - id: pkg-store
         title: internal/store
         kind: agent
+        scope: [internal/store]
         retries: 2
       - id: pkg-api
         title: internal/api
         kind: agent
+        scope: [internal/api]
         retries: 2
       - id: cmd-cli
         title: cmd/cli
         kind: agent
+        scope: [cmd/cli]
         retries: 2
         deps: [pkg-store, pkg-api]
 

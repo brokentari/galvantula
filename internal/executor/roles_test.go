@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/brokentari/galvantula/internal/event"
 	"github.com/brokentari/galvantula/internal/graph"
 )
 
@@ -100,15 +101,34 @@ func TestArchitectMergesAContractThatFailsOnItsStubs(t *testing.T) {
 	if res.CostUSD != 0.25 {
 		t.Errorf("cost %v, want 0.25", res.CostUSD)
 	}
-	for _, want := range []string{"6 of 6 tests fail on the stubs", "# Contract", "merged into main"} {
+	for _, want := range []string{"6 of 6 tests fail on the stubs", "contract: 6 tests, 6 fail on the stubs (the full file is ", "merged into main"} {
 		if !strings.Contains(log, want) {
 			t.Errorf("log lacks %q:\n%s", want, log)
 		}
+	}
+	if strings.Contains(log, "# Contract") {
+		t.Errorf("the log holds the contract's lines:\n%s", log)
+	}
+	if c := res.Contract; c == nil || c.Tests != 6 || c.Red != 6 || c.Markdown != contract || c.Cut {
+		t.Errorf("contract %+v, want 6 tests, 6 red and the file", c)
 	}
 	for _, f := range []string{"main.go", "main_test.go", "CONTRACT.md"} {
 		if _, err := os.Stat(filepath.Join(c.Root, "r", "repo", f)); err != nil {
 			t.Errorf("main lacks %s", f)
 		}
+	}
+}
+
+func TestArchitectContractOverTheLimitIsCut(t *testing.T) {
+	c, _ := setUpRun(t)
+	big := contract + strings.Repeat("a line of text\n", event.MaxContractBytes/10)
+	fakeAgents(t, map[string]string{"architect": writeFile("main.go", stubMain) + writeFile("main_test.go", testsOn(6)) + writeFile("CONTRACT.md", big)})
+	res, _, err := runNode(t, c, "architect", "architect")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Contract == nil || !res.Contract.Cut || len(res.Contract.Markdown) > event.MaxContractBytes {
+		t.Errorf("contract %+v, want it cut to the limit", res.Contract)
 	}
 }
 
@@ -315,7 +335,7 @@ func TestArchitectRedThreshold(t *testing.T) {
 
 // The brief tells the architect the rule that the check enforces.
 func TestArchitectBriefStatesTheRule(t *testing.T) {
-	for _, want := range []string{"at least 5 tests", "at least 80% failing"} {
+	for _, want := range []string{"at least 5 tests", "at least 80% failing", "## Unclear in the spec"} {
 		if !strings.Contains(architectBrief, want) {
 			t.Errorf("the architect brief lacks %q", want)
 		}
