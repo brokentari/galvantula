@@ -88,11 +88,11 @@ func index(evs []event.Event, typ event.Type, node string) int {
 }
 
 func TestFactoryDemoRun(t *testing.T) {
-	g, err := os.ReadFile("../../graphs/factory.yaml")
+	g, err := os.ReadFile("../../graphs/demo.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}
-	script, err := os.ReadFile("../../fakes/factory.yaml")
+	script, err := os.ReadFile("../../fakes/demo.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}

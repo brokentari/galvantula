@@ -10,7 +10,7 @@ import type { Graph } from "./gen/events";
 import { clock } from "./time";
 
 const playStepMs = 350;
-const startCommand = "factory start -fake fakes/factory.yaml graphs/factory.yaml";
+const startCommand = "factory start -fake fakes/demo.yaml graphs/demo.yaml";
 const iconColor = { running: "#6cb6ff", succeeded: "#5fd08f", failed: "#ff8a80" };
 
 function EmptyState() {

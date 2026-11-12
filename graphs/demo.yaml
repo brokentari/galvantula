@@ -1,0 +1,46 @@
+# The demo graph for the fake executor (fakes/demo.yaml). It has the gates
+# and the "tasks" slot of factory.yaml, but no roles and no fix node, so it
+# needs no credential.
+name: demo
+nodes:
+  - id: standards
+    title: Write AGENTS.md from the pinned skills
+    kind: tool
+
+  - id: architect
+    title: Interfaces and acceptance tests
+    kind: agent
+    deps: [standards]
+    retries: 2
+
+  - id: approve-contract
+    title: Approve the contract
+    kind: gate
+    deps: [architect]
+
+  - id: plan
+    title: Emit the task graph
+    kind: plan
+    deps: [approve-contract]
+    retries: 1
+
+  - id: approve-tasks
+    title: Approve the task graph and its cost
+    kind: gate
+    deps: [plan]
+
+  - id: tasks
+    title: Generated task graph
+    kind: slot
+    filled_by: plan
+    deps: [approve-tasks]
+
+  - id: verify
+    title: Full suite with -race
+    kind: tool
+    deps: [tasks]
+
+  - id: review
+    title: ponytail-review, advisory
+    kind: agent
+    deps: [verify]

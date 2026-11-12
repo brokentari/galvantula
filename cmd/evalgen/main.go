@@ -4,9 +4,9 @@
 // evalgen then checks the work itself: the tests must pass on the reference,
 // fail on a program that does nothing, and pass vet, gofmt and go fix.
 //
-// The model runs go test on code it wrote, on this machine, with no sandbox
-// (phase 1 adds one). If ANTHROPIC_API_KEY is set, that code can read it, so
-// use a key with a low spend limit. evalgen's own checks run without it.
+// The model runs go test on code it wrote, on this machine, with no sandbox.
+// If ANTHROPIC_API_KEY is set, that code can read it, so use a key with a low
+// spend limit. evalgen's own checks run without it.
 //
 //	go run ./cmd/evalgen [-guardrails guardrails.yaml] [-retries 2] evals/wordfreq ...
 package main

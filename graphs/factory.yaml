@@ -1,15 +1,27 @@
-# The outer factory graph. You write it by hand; the plan node fills the
-# "tasks" slot with the task graph at run time.
-# Phase 0 leaves out the fix node and replanning; they come in phases 2 and 4.
+# The full factory. After you approve the contract, the planner reads it and
+# writes a task graph: one task per group of packages, each with a scope (the
+# package directories it may write) and its deps. You approve that task graph
+# and its cost ceiling at the second gate. The runtime puts the tasks where
+# the "tasks" slot is. Tasks with no dependency between them run at the same
+# time, each in its own worktree, and the runtime merges each one into main
+# when its check passes. Scopes do not overlap, so the merges cannot conflict.
+# The review, fix and verify nodes then see the whole product.
+#
+# When a task fails its last retry, the runtime removes it and the tasks that
+# depend on it, and runs the planner again for their packages. The other tasks
+# stay. Each replan is a new version of this graph. budget.replans in
+# guardrails.yaml limits replans; past it, a failed task fails the run.
 name: factory
 nodes:
   - id: standards
-    title: Write AGENTS.md from the pinned skills
+    title: Write AGENTS.md, spec.md and go.mod
     kind: tool
+    role: standards
 
   - id: architect
-    title: Interfaces and acceptance tests
+    title: Interfaces, stubs, acceptance tests, CONTRACT.md
     kind: agent
+    role: architect
     deps: [standards]
     retries: 2
 
@@ -19,10 +31,11 @@ nodes:
     deps: [architect]
 
   - id: plan
-    title: Emit the task graph
+    title: Split the work into tasks
     kind: plan
+    role: planner
     deps: [approve-contract]
-    retries: 1
+    retries: 2
 
   - id: approve-tasks
     title: Approve the task graph and its cost
@@ -35,12 +48,23 @@ nodes:
     filled_by: plan
     deps: [approve-tasks]
 
-  - id: verify
-    title: Full suite with -race
-    kind: tool
-    deps: [tasks]
-
   - id: review
     title: ponytail-review, advisory
     kind: agent
-    deps: [verify]
+    role: reviewer
+    advisory: true
+    deps: [tasks]
+
+  - id: fix
+    title: Answer the review findings, if any
+    kind: agent
+    role: fixer
+    advisory: true
+    deps: [review]
+    retries: 1
+
+  - id: verify
+    title: Whole suite with -race
+    kind: tool
+    role: verify
+    deps: [fix]

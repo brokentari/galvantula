@@ -99,7 +99,7 @@ func runEvals(args []string) error {
 	runsDir := fs.String("runs", "runs", "the server's runs folder, where the products are")
 	n := fs.Int("n", 10, "runs per eval")
 	parallel := fs.Int("parallel", 1, "runs at the same time")
-	graphPath := fs.String("graph", "graphs/phase1.yaml", "graph to run")
+	graphPath := fs.String("graph", "graphs/single.yaml", "graph to run")
 	planted := fs.String("planted", "", "plant the flawed first plan in <eval>/planted/<name>.json, to test replanning")
 	fs.Parse(args)
 	if fs.NArg() == 0 {
@@ -121,7 +121,7 @@ func runEvals(args []string) error {
 	}
 	if *planted != "" && !slices.ContainsFunc(parsed.Nodes, func(n graph.Node) bool { return n.Kind == graph.Plan }) {
 		// Only a plan node reads the planted plan. Without one the run would record it and never use it.
-		return fmt.Errorf("-planted needs a graph with a plan node, and %s has none; use graphs/phase4.yaml", *graphPath)
+		return fmt.Errorf("-planted needs a graph with a plan node, and %s has none; use graphs/factory.yaml", *graphPath)
 	}
 	root, err := filepath.Abs(*runsDir)
 	if err != nil {

@@ -1,4 +1,4 @@
-# Hostile contract for graphs/factory.yaml: the contract holds markup that must
+# Hostile contract for graphs/demo.yaml: the contract holds markup that must
 # show as text at the gate and run nothing.
 default:
   duration: 3s

@@ -1,8 +1,8 @@
 # Evals
 
-Each eval is a one-paragraph spec plus hidden acceptance tests. The evals
-measure the factory: after you change a prompt, a model or the graph, run the
-evals and compare the pass rate, cost and time with the last run.
+Each eval has a one-paragraph spec and hidden acceptance tests. The evals
+measure the factory. After you change a prompt, a model or a graph, run the
+evals and compare the pass rate, cost and time with the last results.
 
 ```
 evals/<name>/
@@ -15,13 +15,14 @@ evals/<name>/
 
 ## Who writes the tests
 
-A model writes them, not a person, and not a model that builds products.
-`go run ./cmd/evalgen evals/<name>` gives `spec.md` to the `eval_author`
-model in `guardrails.yaml`. That model writes the hidden tests, the reference
-and `assumptions.md`. `guardrails.yaml` refuses an `eval_author` that any
-builder role also uses, so the tests do not repeat the builders' mistakes.
+A model writes them. It is not a person, and it is not a model that builds
+products. `go run ./cmd/evalgen evals/<name>` gives `spec.md` to the
+`eval_author` model in `guardrails.yaml`. That model writes the hidden tests,
+the reference and `assumptions.md`. `guardrails.yaml` refuses an
+`eval_author` that a builder role also uses, so the tests do not repeat the
+builders' mistakes.
 
-evalgen checks the model's work itself. It keeps the result only if:
+evalgen keeps the model's work only if:
 
 - every test passes on the reference;
 - at least 80% of the tests fail on a program that does nothing, so most tests check real behavior;
@@ -29,9 +30,9 @@ evalgen checks the model's work itself. It keeps the result only if:
 
 If a check fails, evalgen sends the failure back to the model, up to two times.
 
-The model runs `go test` on code it wrote, on your machine, with no sandbox
-until phase 1 adds one. If `ANTHROPIC_API_KEY` is set, that code can read it,
-so use a key with a low spend limit.
+**evalgen has no sandbox.** The model runs `go test` on code it wrote, on your
+machine. If `ANTHROPIC_API_KEY` is set, that code can read it, so use a key
+with a low spend limit.
 
 To change what an eval checks, edit `spec.md` and run evalgen again. Do not
 edit `hidden/` or `reference/` by hand. If `assumptions.md` lists a gap that
@@ -39,28 +40,21 @@ matters, close it in the spec.
 
 ## Plant a planner mistake
 
-`factory eval -graph graphs/phase4.yaml -planted <name>` tests replanning. It replaces the planner's
-first answer with `<eval>/planted/<name>.json`, which has the same shape as the
-planner's answer. The file must pass the plan rules, so the plan is wrong in a
-way the rules cannot see: a task that needs a package that its deps do not
-build. The task fails its check, and the run must recover with a replan and
-still pass the hidden tests. Each result records `planted` and `replans`.
-Only the server reads the file. No agent sees it.
+`factory eval -graph graphs/factory.yaml -planted <name>` tests replanning. It
+replaces the planner's first answer with `<eval>/planted/<name>.json`, which
+has the same shape as the planner's answer. The file must pass the plan rules,
+so its mistake is one the rules cannot see: a task that needs a package that
+its deps do not build. The task fails its check, and the run must replan and
+still pass the hidden tests. Each result records `planted` and `replans`. Only
+the server reads the file. No agent sees it.
 
 | planted plan | the mistake |
 |---|---|
 | `logq/cli-first` | `cmd/logq` has no deps, so it starts before the packages it calls |
 
-The rules cannot see this mistake: they refuse a package with no owner, and
-nothing else about the deps. A planted plan must fail every time, or the
-eval says nothing. Two plans did not. `filter-before-parse` never failed in
-three runs, because it depends on the architect's choice of types.
-`cli-after-parse` gave `cmd/logq` a dep on the parser only. It failed, but a
-retry passed in both runs, because the other packages had merged by then, so
-no replan happened. `cli-first` is the best of the three: it replanned in 5 of
-6 runs, and the sixth passed on retries alone. All six passed the hidden
-tests. Read `replans` before you read the pass rate, and expect some runs
-to pass with none.
+A planted plan must fail every time, or the eval tells you nothing. Retries can
+still hide the mistake: if the other packages merge before the last retry, the
+task passes and no replan happens. So read `replans` before the pass rate.
 
 ## Run the hidden tests
 
@@ -81,3 +75,4 @@ Without `EVAL_PRODUCT`, the tests run against `reference/`, so
 | `dedupe` | one package | repeats anywhere in the input, `-i`, `-c`, `-d`, `-u`, several files |
 | `calc` | one package | a parser: precedence, signs, `^` and `%`, number formatting, error positions |
 | `logq` | four packages named in the spec | log line parser, filters, three output formats, exit codes; the spec asks for four packages so that the planner has parallel work |
+| `rotom` | four packages named in the spec | a TCP server that speaks RESP2 and RESP3 and stores strings with expiry; redis-cli compatibility |

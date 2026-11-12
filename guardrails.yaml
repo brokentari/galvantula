@@ -1,6 +1,5 @@
 # Settings `factory serve` reads when it starts, and stores with each run.
 # Restart the server after you change them.
-# See Software Factory Plan.html.
 go:
   version: "1.27" # the go line in each product's go.mod; also filters the Go guidelines
 

@@ -8,7 +8,7 @@ import (
 )
 
 func TestFactoryGraphIsValid(t *testing.T) {
-	data, err := os.ReadFile("../../graphs/factory.yaml")
+	data, err := os.ReadFile("../../graphs/demo.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}

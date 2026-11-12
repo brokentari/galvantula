@@ -41,7 +41,7 @@ func TestFakeContract(t *testing.T) {
 }
 
 func TestShippedFakesParse(t *testing.T) {
-	for _, f := range []string{"factory", "hostile"} {
+	for _, f := range []string{"demo", "hostile"} {
 		data, err := os.ReadFile("../../fakes/" + f + ".yaml")
 		if err != nil {
 			t.Fatal(err)

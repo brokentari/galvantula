@@ -1,11 +1,11 @@
-# Phase 2: the factory pipeline for one package of work. The standards node
+# The factory without a planner: one implementer does all the work. The standards node
 # puts the rules and the spec on main. The architect writes the interfaces,
 # the acceptance tests and CONTRACT.md; its tests must fail on its stubs. You
 # approve that contract at the gate. The implementer fills in the stubs and
 # may not change the tests. The review is advisory, and so is the fix that
 # answers it: the tests decide the outcome. Verify runs the whole suite with
 # the race detector on what is on main.
-name: phase2
+name: pipeline
 nodes:
   - id: standards
     title: Write AGENTS.md, spec.md and go.mod

@@ -15,7 +15,7 @@ is not reachable, tell the user to start it. Do not start it yourself.
 
 1. Get the spec from the user: what the program must do, in a paragraph or two.
    Name the packages if the user wants a certain split.
-2. Call `factory_start` with the spec. Leave out `graph` (it defaults to `phase4`).
+2. Call `factory_start` with the spec. Leave out `graph` (it defaults to `factory`).
    Set `auto_approve` only if the user says to skip the gates.
 3. Tell the user the run id.
 

@@ -33,7 +33,7 @@ func TestLostRunsCountAsFailures(t *testing.T) {
 	repo = filepath.Join(repo, "..", "..")
 	inTempRepo(t, repo) // runEvals writes evals/results here
 	err = runEvals([]string{"-server", refuse.URL, "-db", "f.db", "-runs", "runs", "-n", "2",
-		"-graph", filepath.Join(repo, "graphs", "phase1.yaml"), filepath.Join(repo, "evals", "wordfreq")})
+		"-graph", filepath.Join(repo, "graphs", "single.yaml"), filepath.Join(repo, "evals", "wordfreq")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,7 +100,7 @@ func TestEvalStopsAtUsageLimit(t *testing.T) {
 	}))
 	defer limits.Close()
 	err = runEvals([]string{"-server", limits.URL, "-db", "f.db", "-runs", "runs", "-n", "3",
-		"-graph", filepath.Join(repo, "graphs", "phase1.yaml"), filepath.Join(repo, "evals", "wordfreq")})
+		"-graph", filepath.Join(repo, "graphs", "single.yaml"), filepath.Join(repo, "evals", "wordfreq")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,7 +172,7 @@ func TestQuietRunsAreLost(t *testing.T) {
 			}))
 			defer srv.Close()
 			err = runEvals([]string{"-server", srv.URL, "-db", "f.db", "-runs", "runs", "-n", "1",
-				"-graph", filepath.Join(repo, "graphs", "phase1.yaml"), filepath.Join(repo, "evals", "wordfreq")})
+				"-graph", filepath.Join(repo, "graphs", "single.yaml"), filepath.Join(repo, "evals", "wordfreq")})
 			<-done
 			if err != nil {
 				t.Fatal(err)
@@ -316,10 +316,10 @@ func TestPlantedPlanReachesTheServer(t *testing.T) {
 	inTempRepo(t, repo)
 	args := func(name string) []string {
 		return []string{"-server", srv.URL, "-db", "f.db", "-runs", "runs", "-n", "1", "-planted", name,
-			"-graph", filepath.Join(repo, "graphs", "phase4.yaml"), filepath.Join(repo, "evals", "logq")}
+			"-graph", filepath.Join(repo, "graphs", "factory.yaml"), filepath.Join(repo, "evals", "logq")}
 	}
-	// phase1 has no plan node, so a planted plan would never be used.
-	noPlanner := append(args("cli-first")[:10:10], "-graph", filepath.Join(repo, "graphs", "phase1.yaml"), filepath.Join(repo, "evals", "logq"))
+	// single has no plan node, so a planted plan would never be used.
+	noPlanner := append(args("cli-first")[:10:10], "-graph", filepath.Join(repo, "graphs", "single.yaml"), filepath.Join(repo, "evals", "logq"))
 	if err := runEvals(noPlanner); err == nil || !strings.Contains(err.Error(), "plan node") || bodies.Load() != nil {
 		t.Fatalf("a graph with no plan node: error %v", err)
 	}

@@ -94,7 +94,7 @@ func TestFactoryCommit(t *testing.T) {
 }
 
 // The MCP server starts runs from the graphs built into the program, so
-// each one must be valid and phase4, its default, must be there.
+// each one must be valid and factory, its default, must be there.
 func TestBuiltInGraphsAreValid(t *testing.T) {
 	files, err := graphs.FS.ReadDir(".")
 	if err != nil {
@@ -109,9 +109,9 @@ func TestBuiltInGraphsAreValid(t *testing.T) {
 		if _, err := graph.Parse(data); err != nil {
 			t.Errorf("%s: %v", f.Name(), err)
 		}
-		found = found || f.Name() == "phase4.yaml"
+		found = found || f.Name() == "factory.yaml"
 	}
 	if !found {
-		t.Error("phase4.yaml is not built in")
+		t.Error("factory.yaml is not built in")
 	}
 }

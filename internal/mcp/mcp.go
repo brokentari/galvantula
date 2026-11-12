@@ -173,7 +173,7 @@ var tools = []tool{
 	{"factory_start", "Start a factory run that builds a Go program from a spec. The run stops at two gates for a person to approve: the contract, then the task graph. Returns the run id.",
 		schema([]string{"spec"}, map[string]any{
 			"spec":         str("The spec, in markdown: what the program must do."),
-			"graph":        str("The graph to run, such as phase4 (the default). It is a file in the graphs folder."),
+			"graph":        str("The graph to run, such as factory (the default). It is a file in the graphs folder."),
 			"auto_approve": flag("Approve both gates without a person. Use it only when the user says to."),
 		})},
 	{"factory_runs", "List the factory runs, newest first, with each one's status.", schema(nil, map[string]any{})},
@@ -210,7 +210,7 @@ func (s Server) start(ctx context.Context, raw jsontext.Value) (string, error) {
 		return "", errors.New("spec is empty")
 	}
 	if a.Graph == "" {
-		a.Graph = "phase4"
+		a.Graph = "factory"
 	}
 	if !graphName.MatchString(a.Graph) { // the name becomes a file name
 		return "", fmt.Errorf("graph %q must be lower case letters, digits and hyphens", a.Graph)

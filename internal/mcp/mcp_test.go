@@ -35,9 +35,9 @@ func (f *fakeFactory) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	switch {
 	case r.URL.Path == "/api/runs":
-		io.WriteString(w, `[{"id":"r-1","graph":"phase4","status":"running"}]`)
+		io.WriteString(w, `[{"id":"r-1","graph":"factory","status":"running"}]`)
 	case r.URL.Path == "/api/runs/r-1/state":
-		io.WriteString(w, `{"id":"r-1","graph":"phase4","status":"running","cost_usd":1.5,"graph_version":2,"replans":1,
+		io.WriteString(w, `{"id":"r-1","graph":"factory","status":"running","cost_usd":1.5,"graph_version":2,"replans":1,
 			"nodes":[{"id":"architect","kind":"agent","status":"succeeded"},{"id":"a","kind":"agent","status":"failed","attempt":3,"last_error":"boom\nmore"}],
 			"gates":[{"node":"approve-contract","title":"Approve the contract","context":["# Contract","two packages"]}]}`)
 	case r.URL.Path == "/api/runs/r-1/logs":
@@ -115,7 +115,7 @@ func TestToolsTalkToTheFactory(t *testing.T) {
 	f := &fakeFactory{posts: map[string]string{}}
 	srv := httptest.NewServer(f)
 	defer srv.Close()
-	s := Server{API: srv.URL, Graphs: fstest.MapFS{"phase4.yaml": {Data: []byte("name: phase4\n")}}}
+	s := Server{API: srv.URL, Graphs: fstest.MapFS{"factory.yaml": {Data: []byte("name: factory\n")}}}
 
 	got := talk(t, s,
 		call(1, "factory_status", `{}`),
@@ -139,10 +139,10 @@ func TestToolsTalkToTheFactory(t *testing.T) {
 	if body := f.posts["/api/runs/r-1/gates/approve-contract"]; !strings.Contains(body, `"approved":false`) || !strings.Contains(body, "split it") {
 		t.Errorf("approve sent %q", body)
 	}
-	if start, _ := text(t, got[3]); !strings.Contains(start, "Started run r-new") || !strings.Contains(f.posts["/api/runs"], `"executor":"claude"`) || !strings.Contains(f.posts["/api/runs"], "name: phase4") {
+	if start, _ := text(t, got[3]); !strings.Contains(start, "Started run r-new") || !strings.Contains(f.posts["/api/runs"], `"executor":"claude"`) || !strings.Contains(f.posts["/api/runs"], "name: factory") {
 		t.Errorf("start: %q, sent %q", start, f.posts["/api/runs"])
 	}
-	if runs, _ := text(t, got[4]); !strings.Contains(runs, "r-1  phase4  running") {
+	if runs, _ := text(t, got[4]); !strings.Contains(runs, "r-1  factory  running") {
 		t.Errorf("runs: %q", runs)
 	}
 }
@@ -179,7 +179,7 @@ func TestToolErrorsReachTheModel(t *testing.T) {
 }
 
 func TestStatusPrintsTheBrief(t *testing.T) {
-	const head = `{"id":"r-1","graph":"phase4","status":"running","gates":[`
+	const head = `{"id":"r-1","graph":"factory","status":"running","gates":[`
 	for name, c := range map[string]struct {
 		gate string
 		want []string

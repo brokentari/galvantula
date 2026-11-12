@@ -1,4 +1,4 @@
-# Fake behavior for graphs/factory.yaml. It shows the contract gate with a real
+# Fake behavior for graphs/demo.yaml. It shows the contract gate with a real
 # contract, a send-back round (the architect writes a revised contract), parallel
 # work (store and api run at the same time), a retry (api fails once), and both gates.
 default:
