@@ -8,14 +8,60 @@ on:
 permissions:
   contents: read
 
+# Each job restores the newest Go cache from main and only pushes to main save one, so the cache stays current and PRs do not upload.
+env:
+  GO_CACHE_PATHS: |
+    ~/.cache/go-build
+    ~/go/pkg/mod
+
 jobs:
-  go:
+  lint:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
+          cache: false
+      - uses: actions/cache/restore@v6
+        with:
+          path: ${{ env.GO_CACHE_PATHS }}
+          key: go-lint-${{ hashFiles('go.sum') }}-${{ github.sha }}
+          restore-keys: go-lint-${{ hashFiles('go.sum') }}-
+      - name: gofmt
+        run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+      - run: go vet ./...
+      - run: GOFLAGS=-buildvcs=false go fix -diff ./...
+      - name: List every test
+        run: |
+          set -o pipefail
+          go test -list . ./... | grep '^Test' | LC_ALL=C sort > tests.txt
+      - uses: actions/upload-artifact@v7
+        with:
+          name: tests-all
+          path: tests.txt
+      - if: github.event_name == 'push'
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ env.GO_CACHE_PATHS }}
+          key: go-lint-${{ hashFiles('go.sum') }}-${{ github.sha }}
+
+  test:
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        shard: [0, 1, 2]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: actions/cache/restore@v6
+        with:
+          path: ${{ env.GO_CACHE_PATHS }}
+          key: go-test-${{ hashFiles('go.sum') }}-${{ github.sha }}
+          restore-keys: go-test-${{ hashFiles('go.sum') }}-
       # The sandbox sees only /usr and runs Go from /usr/bin, as in docker/Dockerfile.
       - name: Set up the sandbox
         run: |
@@ -24,11 +70,34 @@ jobs:
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           sudo cp -a "$(go env GOROOT)" /usr/local/go-ci
           sudo ln -sf /usr/local/go-ci/bin/go /usr/local/go-ci/bin/gofmt /usr/bin/
-      - name: gofmt
-        run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
-      - run: go vet ./...
-      - run: GOFLAGS=-buildvcs=false go fix -diff ./...
-      - run: go test -race ./...
+      - name: go test -race, shard ${{ matrix.shard }} of 3
+        run: |
+          set -o pipefail
+          go run github.com/Songmu/gotesplit/cmd/gotesplit@v0.5.0 -total=3 -index=${{ matrix.shard }} ./... -- -race -v | tee test.log
+      - name: List the tests this shard ran
+        run: |
+          grep -oP '^--- (PASS|FAIL|SKIP): \K\S+' test.log | LC_ALL=C sort > ran.txt
+      - uses: actions/upload-artifact@v7
+        with:
+          name: tests-ran-${{ matrix.shard }}
+          path: ran.txt
+      - if: github.event_name == 'push' && matrix.shard == 0
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ env.GO_CACHE_PATHS }}
+          key: go-test-${{ hashFiles('go.sum') }}-${{ github.sha }}
+
+  # Fails if the shards together did not run exactly the tests that go test -list finds.
+  shards-cover-every-test:
+    needs: [lint, test]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: tests-*
+      - run: |
+          cat tests-ran-*/ran.txt | LC_ALL=C sort > ran.txt
+          diff tests-all/tests.txt ran.txt
 
   ui:
     runs-on: ubuntu-24.04
