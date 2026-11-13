@@ -100,6 +100,11 @@ func serve(args []string) error {
 	if err != nil {
 		return err
 	}
+	lock, err := lockDB(*dbPath)
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
 	store, err := event.Open(*dbPath)
 	if err != nil {
 		return err
@@ -108,7 +113,6 @@ func serve(args []string) error {
 
 	// Bind the port before resuming runs. If another server already holds
 	// it, this one stops here, before it can drive that server's runs too.
-	// shortcut: two servers on different ports can still share one database; add a lock if that becomes a real setup.
 	ln, err := net.Listen("tcp", *addr)
 	if err != nil {
 		return err
@@ -128,6 +132,8 @@ func serve(args []string) error {
 	} else if err := sandboxReady(); err != nil {
 		ln.Close()
 		return fmt.Errorf("%w; unset the credential to serve fake runs only", err)
+	} else if run.Seed, err = executor.WarmCache(ctx, root, rails.Go.Version); err != nil {
+		slog.Warn("no warm build cache; each check builds the standard library", "err", err)
 	}
 	if err := run.ResumeAll(); err != nil {
 		ln.Close()

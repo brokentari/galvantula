@@ -48,8 +48,11 @@ type Claude struct {
 	// that deps.txt lists. The defaults are the public Go proxy and checksum
 	// database. Tests point them at files.
 	Proxy, SumDB string
+	// Seed is a cache from WarmCache. Each new cache starts as a copy of it.
+	Seed string
 
 	timeout time.Duration // replaces the node time limit in tests
+	bin     string        // replaces claude on PATH in tests
 }
 
 var tools = []string{"Read", "Write", "Edit", "Glob", "Grep", "Bash"}
@@ -156,7 +159,7 @@ func (c Claude) agent(ctx context.Context, repo workspace.Repo, t Task, log func
 			return Result{}, &InfraError{Err: err}
 		}
 	}
-	bin, err := claudeBin()
+	bin, err := c.claudeBin()
 	if err != nil {
 		return Result{}, &InfraError{Err: err}
 	}
@@ -409,6 +412,11 @@ func (c Claude) check(ctx context.Context, repo workspace.Repo, wt string, node 
 	if err := noLinks(wt); err != nil {
 		return err // nothing else reads files that a link could redirect
 	}
+	if slices.Contains(p.needs, "CONTRACT.md") {
+		if ct := loadContract(wt, redCounts{}); ct != nil && ct.Unclear.Line == 0 {
+			errs = append(errs, errors.New(`CONTRACT.md must have a section headed "## Unclear in the spec"; write "Nothing." in it if spec.md leaves nothing open`))
+		}
+	}
 	if err := noSkips(wt); err != nil {
 		errs = append(errs, err)
 	}
@@ -572,13 +580,58 @@ func (c Claude) newCache() (string, error) {
 	if err := os.MkdirAll(BuildCaches(c.Root), 0o755); err != nil {
 		return "", err
 	}
-	return os.MkdirTemp(BuildCaches(c.Root), "go-build-")
+	dir, err := os.MkdirTemp(BuildCaches(c.Root), "go-build-")
+	if err != nil || c.Seed == "" {
+		return dir, err
+	}
+	if err := os.CopyFS(dir, os.DirFS(c.Seed)); err != nil {
+		os.RemoveAll(dir)
+		return "", err
+	}
+	return dir, nil
+}
+
+// WarmCache builds the standard library for the check's steps into a new
+// cache under root, and returns the cache. Only runtime code builds it, and
+// agents get copies, so no agent can plant a result in it.
+func WarmCache(ctx context.Context, root, goVersion string) (string, error) {
+	if err := os.MkdirAll(BuildCaches(root), 0o755); err != nil {
+		return "", err
+	}
+	dir, err := os.MkdirTemp(BuildCaches(root), "warm-")
+	if err != nil {
+		return "", err
+	}
+	wt, home, cache := filepath.Join(dir, "p"), filepath.Join(dir, "home"), filepath.Join(dir, "cache")
+	files := map[string]string{
+		"go.mod":       "module p\n\ngo " + goVersion + "\n",
+		"main.go":      "package main\n\nimport \"fmt\"\n\nfunc main() { fmt.Println(\"ok\") }\n",
+		"main_test.go": "package main\n\nimport \"testing\"\n\nfunc TestOK(t *testing.T) {}\n",
+	}
+	err = errors.Join(os.Mkdir(wt, 0o755), os.Mkdir(home, 0o755), os.Mkdir(cache, 0o755))
+	for name, body := range files {
+		err = errors.Join(err, os.WriteFile(filepath.Join(wt, name), []byte(body), 0o644))
+	}
+	box := Claude{}.box(cache, wt, home, nil)
+	for _, step := range slices.Concat(baseSteps, [][]string{{"go", "test", "-count=1", "./..."}, {"go", "test", "-race", "-count=1", "./..."}}) {
+		if err != nil {
+			break
+		}
+		if out, stepErr := sandbox.Command(ctx, box, step[0], step[1:]...).CombinedOutput(); stepErr != nil {
+			err = fmt.Errorf("%s: %w\n%s", strings.Join(step, " "), stepErr, out)
+		}
+	}
+	if err != nil {
+		os.RemoveAll(dir)
+		return "", err
+	}
+	return cache, nil
 }
 
 // claudeBin finds the real claude executable. Updates change its path, so
 // look it up on each attempt.
-func claudeBin() (string, error) {
-	p, err := exec.LookPath("claude")
+func (c Claude) claudeBin() (string, error) {
+	p, err := exec.LookPath(cmp.Or(c.bin, "claude"))
 	if err != nil {
 		return "", err
 	}

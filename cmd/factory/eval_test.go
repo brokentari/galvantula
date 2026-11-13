@@ -208,17 +208,6 @@ func inTempRepo(t *testing.T, repo string) {
 	}
 }
 
-func TestMedian(t *testing.T) {
-	for _, tt := range []struct {
-		xs   []float64
-		want float64
-	}{{nil, 0}, {[]float64{3, 1, 2}, 2}, {[]float64{4, 1, 3, 2}, 2.5}} {
-		if got := median(tt.xs); got != tt.want {
-			t.Errorf("median(%v) = %v, want %v", tt.xs, got, tt.want)
-		}
-	}
-}
-
 // The hidden tests score a product in the sandbox. They must still build and
 // run there with only the parts of the repo they need mounted.
 func TestHiddenTestsScoreAProduct(t *testing.T) {

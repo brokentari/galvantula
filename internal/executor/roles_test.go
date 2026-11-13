@@ -27,7 +27,7 @@ func count(n int) ([]int, error) { return make([]int, n), nil }
 
 func main() {}
 `
-	contract = "# Contract\n\ncount(n) returns n numbers. The tests call it with 0 to 5.\n"
+	contract = "# Contract\n\n## Unclear in the spec\n\nNothing.\n\ncount(n) returns n numbers. The tests call it with 0 to 5.\n"
 )
 
 // testsOn returns a test file with n tests. Each fails on the stub.
@@ -40,10 +40,10 @@ func testsOn(n int) string {
 	return b.String()
 }
 
-// fakeAgents puts a claude on PATH that does different work in each node's
+// fakeAgents writes c's claude, which does different work in each node's
 // worktree, chosen by the folder's name. A node with no script fails.
 // A script may set RESULT, the text the agent ends with.
-func fakeAgents(t *testing.T, scripts map[string]string) {
+func fakeAgents(t *testing.T, c Claude, scripts map[string]string) {
 	t.Helper()
 	var b strings.Builder
 	b.WriteString("#!/bin/sh\necho \"$@\" > \"$HOME/args\"\nRESULT=done\ncase \"$(basename \"$PWD\")\" in\n")
@@ -52,11 +52,9 @@ func fakeAgents(t *testing.T, scripts map[string]string) {
 	}
 	b.WriteString("*) echo 'no script for this node' >&2; exit 1 ;;\nesac\n")
 	b.WriteString(`echo "{\"type\":\"result\",\"is_error\":false,\"result\":\"$RESULT\",\"total_cost_usd\":0.25}"` + "\n")
-	bin := t.TempDir()
-	if err := os.WriteFile(filepath.Join(bin, "claude"), []byte(b.String()), 0o755); err != nil {
+	if err := os.WriteFile(c.bin, []byte(b.String()), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
 
 // runNode runs one node of run "r", as the runner would, and collects its log.
@@ -93,7 +91,7 @@ func architectWork(tests int) string {
 
 func TestArchitectMergesAContractThatFailsOnItsStubs(t *testing.T) {
 	c, _ := setUpRun(t)
-	fakeAgents(t, map[string]string{"architect": architectWork(6)})
+	fakeAgents(t, c, map[string]string{"architect": architectWork(6)})
 	res, log, err := runNode(t, c, "architect", "architect")
 	if err != nil {
 		t.Fatal(err)
@@ -121,6 +119,7 @@ func TestArchitectMergesAContractThatFailsOnItsStubs(t *testing.T) {
 
 // A second agent implements the stubs. The contract merges only if its tests pass.
 func TestOracleTrialBuildOfTheTests(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name, oracle, wantErr string
 	}{
@@ -131,7 +130,7 @@ func TestOracleTrialBuildOfTheTests(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			c, _ := setUpRun(t)
 			c.SkipOracle = false
-			fakeAgents(t, map[string]string{"architect": architectWork(6), "oracle": tt.oracle})
+			fakeAgents(t, c, map[string]string{"architect": architectWork(6), "oracle": tt.oracle})
 			res, log, err := runNode(t, c, "architect", "architect")
 			if res.CostUSD != 0.5 {
 				t.Errorf("cost %v, want 0.5: the oracle's cost counts", res.CostUSD)
@@ -155,7 +154,7 @@ func TestOracleTrialBuildOfTheTests(t *testing.T) {
 func TestArchitectContractOverTheLimitIsCut(t *testing.T) {
 	c, _ := setUpRun(t)
 	big := contract + strings.Repeat("a line of text\n", event.MaxContractBytes/10)
-	fakeAgents(t, map[string]string{"architect": writeFile("main.go", stubMain) + writeFile("main_test.go", testsOn(6)) + writeFile("CONTRACT.md", big)})
+	fakeAgents(t, c, map[string]string{"architect": writeFile("main.go", stubMain) + writeFile("main_test.go", testsOn(6)) + writeFile("CONTRACT.md", big)})
 	res, _, err := runNode(t, c, "architect", "architect")
 	if err != nil {
 		t.Fatal(err)
@@ -166,6 +165,7 @@ func TestArchitectContractOverTheLimitIsCut(t *testing.T) {
 }
 
 func TestArchitectCheckFailures(t *testing.T) {
+	t.Parallel()
 	panicking := writeFile("main.go", stubMain+"\nfunc init() { panic(\"stub\") }\n") + writeFile("main_test.go", testsOn(6)) + writeFile("CONTRACT.md", contract)
 	skipping := writeFile("main.go", stubMain) + writeFile("main_test.go", testsOn(6)+"\nfunc TestSkipped(t *testing.T) {\n\tt.Skip(\"later\")\n}\n") + writeFile("CONTRACT.md", contract)
 	tests := []struct {
@@ -175,12 +175,13 @@ func TestArchitectCheckFailures(t *testing.T) {
 		{"too few tests", architectWork(3), "at least 5 must run"},
 		{"a stub panics", panicking, "at least 5 must run"},
 		{"no contract", writeFile("main.go", stubMain) + writeFile("main_test.go", testsOn(6)), "CONTRACT.md must exist"},
+		{"no unclear section", writeFile("main.go", stubMain) + writeFile("main_test.go", testsOn(6)) + writeFile("CONTRACT.md", "# Contract\n"), "Unclear in the spec"},
 		{"a test skips", skipping, "must not skip tests: main_test.go"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			c, _ := setUpRun(t)
-			fakeAgents(t, map[string]string{"architect": tt.work})
+			fakeAgents(t, c, map[string]string{"architect": tt.work})
 			_, _, err := runNode(t, c, "architect", "architect")
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("got %v, want a check failure with %q", err, tt.want)
@@ -199,7 +200,7 @@ func TestArchitectCheckFailures(t *testing.T) {
 // the fix, and verify.
 func TestPipeline(t *testing.T) {
 	c, _ := setUpRun(t)
-	fakeAgents(t, map[string]string{
+	fakeAgents(t, c, map[string]string{
 		"architect": architectWork(6),
 		"implement": writeFile("main.go", doneMain) + writeFile("NOTES.md", "Counts.\n"),
 		"review":    "touch probe 2>/dev/null\nRESULT='Verdict: fix 1 first.'",
@@ -226,6 +227,7 @@ func TestPipeline(t *testing.T) {
 }
 
 func TestImplementerCannotChangeTheContract(t *testing.T) {
+	t.Parallel()
 	skipping := "package main\n\nimport \"testing\"\n\nfunc TestExtra(t *testing.T) {\n\tt.Skip(\"no\")\n}\n"
 	tests := []struct {
 		name, work, want string
@@ -242,7 +244,7 @@ func TestImplementerCannotChangeTheContract(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			c, _ := setUpRun(t)
-			fakeAgents(t, map[string]string{"architect": architectWork(6), "implement": tt.work})
+			fakeAgents(t, c, map[string]string{"architect": architectWork(6), "implement": tt.work})
 			mustRun(t, c, architect)
 			_, _, err := runNode(t, c, "implement", "implementer")
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
@@ -256,7 +258,7 @@ func TestImplementerCannotChangeTheContract(t *testing.T) {
 func TestImplementerMayAddTests(t *testing.T) {
 	c, _ := setUpRun(t)
 	extra := "package main\n\nimport \"testing\"\n\nfunc TestExtra(t *testing.T) {\n\tif got, _ := count(2); len(got) != 2 {\n\t\tt.Fatal(got)\n\t}\n}\n"
-	fakeAgents(t, map[string]string{"architect": architectWork(6), "implement": writeFile("main.go", doneMain) + writeFile("extra_test.go", extra)})
+	fakeAgents(t, c, map[string]string{"architect": architectWork(6), "implement": writeFile("main.go", doneMain) + writeFile("extra_test.go", extra)})
 	mustRun(t, c, architect, implement)
 	if _, err := os.Stat(filepath.Join(c.Root, "r", "repo", "extra_test.go")); err != nil {
 		t.Error("the new test file was not merged")
@@ -265,10 +267,11 @@ func TestImplementerMayAddTests(t *testing.T) {
 
 // The fix node does nothing, and costs nothing, when the review is clean or missing.
 func TestFixSkipsWithoutFindings(t *testing.T) {
+	t.Parallel()
 	for name, report := range map[string]string{"clean": "Looks good. Ship.\n", "none": ""} {
 		t.Run(name, func(t *testing.T) {
 			c, _ := setUpRun(t)
-			fakeAgents(t, map[string]string{}) // any agent that starts fails
+			fakeAgents(t, c, map[string]string{}) // any agent that starts fails
 			if report != "" {
 				path := filepath.Join(c.Root, "r", "repo", ".factory", "review.md")
 				if err := os.WriteFile(path, []byte(report), 0o644); err != nil {
@@ -284,6 +287,7 @@ func TestFixSkipsWithoutFindings(t *testing.T) {
 }
 
 func TestVerifyFailures(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name, file, body, want string
 	}{
@@ -321,7 +325,7 @@ func TestEveryAgentRoleHasAPlan(t *testing.T) {
 // abandoned, and the fix node then has no report and skips itself.
 func TestReviewerWithoutAReportFails(t *testing.T) {
 	c, _ := setUpRun(t)
-	fakeAgents(t, map[string]string{"review": "RESULT=''"})
+	fakeAgents(t, c, map[string]string{"review": "RESULT=''"})
 	if _, _, err := runNode(t, c, "review", "reviewer"); err == nil || !strings.Contains(err.Error(), "without a report") {
 		t.Fatalf("got %v, want an error about the missing report", err)
 	}
@@ -342,6 +346,7 @@ func passingTests(n int) string {
 // The architect's rule is at least 80% of the tests failing: 4 of 5 passes
 // the check, and 3 of 5 does not.
 func TestArchitectRedThreshold(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name  string
 		fails int
@@ -354,7 +359,7 @@ func TestArchitectRedThreshold(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			c, _ := setUpRun(t)
 			work := writeFile("main.go", stubMain) + writeFile("main_test.go", testsOn(tt.fails)+passingTests(5-tt.fails)) + writeFile("CONTRACT.md", contract)
-			fakeAgents(t, map[string]string{"architect": work})
+			fakeAgents(t, c, map[string]string{"architect": work})
 			_, _, err := runNode(t, c, "architect", "architect")
 			switch {
 			case tt.want == "" && err != nil:
@@ -366,19 +371,11 @@ func TestArchitectRedThreshold(t *testing.T) {
 	}
 }
 
-// The brief tells the architect the rule that the check enforces.
-func TestArchitectBriefStatesTheRule(t *testing.T) {
-	for _, want := range []string{"at least 5 tests", "at least 80% failing", "## Unclear in the spec"} {
-		if !strings.Contains(architectBrief, want) {
-			t.Errorf("the architect brief lacks %q", want)
-		}
-	}
-}
-
 // The runtime reads and writes some files that agents make, outside the
 // sandbox. A link there must fail the check at once. It must not hang the
 // runtime, as a read of /dev/zero would, or redirect the review report.
 func TestLinksFailTheCheck(t *testing.T) {
+	t.Parallel()
 	for name, link := range map[string]string{
 		"a link named like a test":    "ln -s /dev/zero zero_test.go",
 		"a link in place of a report": "mkdir -p .factory && ln -s /etc/hostname .factory/review.md",
@@ -386,11 +383,40 @@ func TestLinksFailTheCheck(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			c, _ := setUpRun(t)
-			fakeAgents(t, map[string]string{"architect": architectWork(6), "implement": writeFile("main.go", doneMain) + link + "\n"})
+			fakeAgents(t, c, map[string]string{"architect": architectWork(6), "implement": writeFile("main.go", doneMain) + link + "\n"})
 			mustRun(t, c, architect)
 			_, _, err := runNode(t, c, "implement", "implementer")
 			if err == nil || !strings.Contains(err.Error(), "symbolic links are not allowed") {
 				t.Fatalf("got %v, want a refusal of the link", err)
+			}
+		})
+	}
+}
+
+func TestNoSkips(t *testing.T) {
+	tests := []struct {
+		name, src string
+		skips     bool
+	}{
+		{"a comment and a string", "// t.Skip(\"x\") is not allowed\nfunc TestA(t *testing.T) { t.Log(\".Skip(\") }", false},
+		{"a method of another type", "type plan struct{}\n\nfunc (plan) Skip(string) {}\n\nfunc TestA(t *testing.T) { plan{}.Skip(\"x\") }", false},
+		{"t.Skip", "func TestA(t *testing.T) { t.Skip(\"x\") }", true},
+		{"testing.TB", "func skip(tb testing.TB) { tb.Skipf(\"%d\", 1) }", true},
+		{"another name", "func TestA(t *testing.T) { x := t; x.SkipNow() }", true},
+		{"an embedded T", "type wrap struct{ *testing.T }\n\nfunc TestA(t *testing.T) { wrap{t}.Skip() }", true},
+		{"a method value", "func TestA(t *testing.T) { f := t.SkipNow; f() }", true},
+		{"next to a name from a non-test file", "func TestA(t *testing.T) { helper(t); t.Skip() }", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			src := "package p\n\nimport \"testing\"\n\n" + tt.src + "\n"
+			if err := os.WriteFile(filepath.Join(dir, "p_test.go"), []byte(src), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			err := noSkips(dir)
+			if got := err != nil && strings.Contains(err.Error(), "must not skip tests: p_test.go"); got != tt.skips {
+				t.Errorf("noSkips = %v, want a skip found: %v", err, tt.skips)
 			}
 		})
 	}

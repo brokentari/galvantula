@@ -41,7 +41,7 @@ func (c Claude) oracle(ctx context.Context, wt string, log func(string)) (cost f
 	if err := errors.Join(os.RemoveAll(filepath.Join(work, ".git")), os.Mkdir(home, 0o755)); err != nil {
 		return 0, &InfraError{Err: err}
 	}
-	bin, err := claudeBin()
+	bin, err := c.claudeBin()
 	if err != nil {
 		return 0, &InfraError{Err: err}
 	}

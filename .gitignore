@@ -2,6 +2,7 @@
 *.db
 *.db-wal
 *.db-shm
+*.db.lock
 ui/node_modules/
 ui/dist/
 /runs/

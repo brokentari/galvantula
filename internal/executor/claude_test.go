@@ -1,11 +1,13 @@
 package executor
 
 import (
+	"context"
 	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -45,17 +47,15 @@ func main() {
 }
 `
 
-// fakeAgent puts a claude script first on PATH. It records its arguments in
+// fakeAgent writes c's claude script. It records its arguments in
 // $HOME/args, runs work in the worktree, and reports a result that cost $0.25.
-func fakeAgent(t *testing.T, work string) {
+func fakeAgent(t *testing.T, c Claude, work string) {
 	t.Helper()
-	bin := t.TempDir()
 	script := "#!/bin/sh\necho \"$@\" > \"$HOME/args\"\n" + work +
 		"\necho '{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"total_cost_usd\":0.25}'\n"
-	if err := os.WriteFile(filepath.Join(bin, "claude"), []byte(script), 0o755); err != nil {
+	if err := os.WriteFile(c.bin, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
 
 func writeFile(name, body string) string {
@@ -67,11 +67,16 @@ func setUpRun(t *testing.T) (Claude, func(Task) (Result, error)) {
 	if _, err := exec.LookPath("bwrap"); err != nil {
 		t.Skip("bwrap is not installed")
 	}
+	t.Parallel()
+	seed, err := warmCache()
+	if err != nil {
+		t.Fatal(err)
+	}
 	var rails guardrails.Guardrails
 	rails.Go.Version = "1.27"
 	rails.Budget.NodeUSD, rails.Budget.RunUSD, rails.Budget.NodeMinutes = 1, 1, 1
 	rails.Models.Implementer = guardrails.Role{Model: "m", Effort: "low"}
-	c := Claude{Root: t.TempDir(), Rails: rails, Spec: "Print 0, 1 and 2.\n", Auth: "CLAUDE_CODE_OAUTH_TOKEN=test", SkipOracle: true}
+	c := Claude{Root: t.TempDir(), Rails: rails, Spec: "Print 0, 1 and 2.\n", Auth: "CLAUDE_CODE_OAUTH_TOKEN=test", SkipOracle: true, bin: filepath.Join(t.TempDir(), "claude"), Seed: seed}
 	run := func(task Task) (Result, error) {
 		task.Run = "r"
 		return c.Run(t.Context(), task, func(string) {})
@@ -84,12 +89,29 @@ func setUpRun(t *testing.T) (Claude, func(Task) (Result, error)) {
 
 var impl = graph.Node{ID: "impl", Kind: graph.Agent}
 
+var warmDir string
+
+// warmCache is one WarmCache for the whole package.
+var warmCache = sync.OnceValues(func() (string, error) {
+	var err error
+	if warmDir, err = os.MkdirTemp("", "executor-warm"); err != nil {
+		return "", err
+	}
+	return WarmCache(context.Background(), warmDir, "1.27")
+})
+
+func TestMain(m *testing.M) {
+	code := m.Run()
+	os.RemoveAll(warmDir)
+	os.Exit(code)
+}
+
 func TestAgentPassesCheckAndMerges(t *testing.T) {
 	c, run := setUpRun(t)
 	// The agent also builds the program, which leaves a binary behind. It adds
 	// a binary test fixture, which must stay.
 	// Its .gitignore matches main.go, which the check saw, so main must get it.
-	fakeAgent(t, writeFile("main.go", goodMain)+writeFile("main_test.go", goodTest)+writeFile(".gitignore", "main.go\nbuilt\n")+"go build -o built .\n"+
+	fakeAgent(t, c, writeFile("main.go", goodMain)+writeFile("main_test.go", goodTest)+writeFile(".gitignore", "main.go\nbuilt\n")+"go build -o built .\n"+
 		"mkdir testdata && printf 'a\\000b' > testdata/sample.bin\n")
 	res, err := run(Task{Node: impl, Attempt: 1})
 	if err != nil {
@@ -124,6 +146,7 @@ func TestAgentPassesCheckAndMerges(t *testing.T) {
 }
 
 func TestCheckFailures(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name, work, want string
 	}{
@@ -138,7 +161,7 @@ func TestCheckFailures(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			c, run := setUpRun(t)
-			fakeAgent(t, tt.work)
+			fakeAgent(t, c, tt.work)
 			res, err := run(Task{Node: impl, Attempt: 1})
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("got %v, want a check failure about %q", err, tt.want)
@@ -162,7 +185,7 @@ func TestCheckFailures(t *testing.T) {
 func TestAgentGitDirIsIgnored(t *testing.T) {
 	c, run := setUpRun(t)
 	marker := filepath.Join(t.TempDir(), "escaped")
-	fakeAgent(t, writeFile("main.go", goodMain)+writeFile("main_test.go", goodTest)+
+	fakeAgent(t, c, writeFile("main.go", goodMain)+writeFile("main_test.go", goodTest)+
 		"rm .git && mkdir -p .git/objects .git/refs .git/hooks && echo 'ref: refs/heads/main' > .git/HEAD\n"+
 		"printf '[core]\\n\\trepositoryformatversion = 0\\n\\tfsmonitor = touch "+marker+"\\n' > .git/config\n"+
 		"printf '#!/bin/sh\\ntouch "+marker+"\\n' > .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit\n")
@@ -181,18 +204,18 @@ func TestAgentGitDirIsIgnored(t *testing.T) {
 // its cost counts toward the budget.
 func TestAgentFailureClasses(t *testing.T) {
 	c, run := setUpRun(t)
-	fakeAgent(t, `echo '{"type":"result","is_error":true,"result":"You have hit your usage limit"}'; exit 0`)
+	fakeAgent(t, c, `echo '{"type":"result","is_error":true,"result":"You have hit your usage limit"}'; exit 0`)
 	if _, err := run(Task{Node: impl, Attempt: 1}); !errors.As(err, new(*LimitError)) {
 		t.Errorf("usage limit: got %v, want a LimitError", err)
 	}
 
-	fakeAgent(t, "exit 3") // crashed: no result line
+	fakeAgent(t, c, "exit 3") // crashed: no result line
 	if res, err := run(Task{Node: impl, Attempt: 2}); !IsInfra(err) || res.CostUSD != 0 {
 		t.Errorf("crash: got %v at $%v, want an infra failure at $0", err, res.CostUSD)
 	}
 
 	c.timeout = 500 * time.Millisecond
-	fakeAgent(t, "sleep 60")
+	fakeAgent(t, c, "sleep 60")
 	res, err := c.Run(t.Context(), Task{Run: "r", Node: impl, Attempt: 3}, func(string) {})
 	if err == nil || IsInfra(err) || errors.As(err, new(*LimitError)) || !strings.Contains(err.Error(), "ran past") {
 		t.Errorf("timeout: got %v, want a task failure", err)
@@ -204,7 +227,7 @@ func TestAgentFailureClasses(t *testing.T) {
 
 func TestFirstRetryResumesThenStartsOver(t *testing.T) {
 	c, run := setUpRun(t)
-	fakeAgent(t, writeFile("main.go", oldLoop))
+	fakeAgent(t, c, writeFile("main.go", oldLoop))
 	_, err := run(Task{Node: impl, Attempt: 1})
 	if err == nil {
 		t.Fatal("attempt 1 should fail")
@@ -212,7 +235,7 @@ func TestFirstRetryResumesThenStartsOver(t *testing.T) {
 	args := filepath.Join(c.Root, "r", "home", "impl", "args")
 	first, _ := os.ReadFile(args)
 
-	fakeAgent(t, writeFile("main.go", goodMain)+writeFile("main_test.go", goodTest))
+	fakeAgent(t, c, writeFile("main.go", goodMain)+writeFile("main_test.go", goodTest))
 	if _, err := run(Task{Node: impl, Attempt: 2, Resume: true, Feedback: err.Error()}); err != nil {
 		t.Fatal(err)
 	}
@@ -223,12 +246,12 @@ func TestFirstRetryResumesThenStartsOver(t *testing.T) {
 	}
 }
 
-// The check must not use the agent's build cache: Go caches vet and fix
-// results, so an agent could plant a clean result for its own code. The
-// fake agent marks its cache; its test fails if the check's cache has the mark.
+// Go caches vet and fix results, so an agent that reached the check's cache or
+// the warm cache could plant a clean result for its own code. The fake agent
+// marks its cache; neither of the others may get the mark.
 func TestCheckCacheIsNotTheAgents(t *testing.T) {
-	_, run := setUpRun(t)
-	fakeAgent(t, writeFile("main.go", goodMain)+`touch "$GOCACHE/planted"
+	c, run := setUpRun(t)
+	fakeAgent(t, c, writeFile("main.go", goodMain)+`touch "$GOCACHE/planted"
 `+writeFile("main_test.go", `package main
 
 import (
@@ -245,5 +268,8 @@ func TestCacheIsNew(t *testing.T) {
 `))
 	if _, err := run(Task{Node: impl, Attempt: 1}); err != nil {
 		t.Fatalf("the check failed: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(c.Seed, "planted")); err == nil {
+		t.Error("the agent wrote to the warm cache")
 	}
 }

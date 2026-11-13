@@ -53,6 +53,8 @@ type Runner struct {
 	Auth string
 	// Commit names the code this runner runs. Each run records it.
 	Commit string
+	// Seed is the warm build cache for Claude runs, or empty.
+	Seed string
 
 	wg   sync.WaitGroup
 	mu   sync.Mutex
@@ -106,7 +108,7 @@ func (r *Runner) fromState(st *event.State) (executor.Executor, error) {
 		if r.Auth == "" {
 			return nil, errNoAuth
 		}
-		return executor.Claude{Root: r.Root, Rails: st.Rails, Spec: st.Spec, PlantedPlan: st.PlantedPlan, Auth: r.Auth}, nil
+		return executor.Claude{Root: r.Root, Rails: st.Rails, Spec: st.Spec, PlantedPlan: st.PlantedPlan, Auth: r.Auth, Seed: r.Seed}, nil
 	}
 	return nil, fmt.Errorf("unknown executor %q", st.Executor)
 }

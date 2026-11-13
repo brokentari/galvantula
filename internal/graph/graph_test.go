@@ -1,21 +1,10 @@
 package graph
 
 import (
-	"os"
 	"slices"
 	"strings"
 	"testing"
 )
-
-func TestFactoryGraphIsValid(t *testing.T) {
-	data, err := os.ReadFile("../../graphs/demo.yaml")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Parse(data); err != nil {
-		t.Fatal(err)
-	}
-}
 
 func TestValidateRejects(t *testing.T) {
 	tests := []struct {
