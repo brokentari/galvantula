@@ -40,7 +40,7 @@ func testsFor(pkg, fn, want string) string {
 func twoPackages() string {
 	return put("pkga/a.go", stubsFor("pkga", "A")) + put("pkga/a_test.go", testsFor("pkga", "A", "n+1")) +
 		put("pkgb/b.go", stubsFor("pkgb", "B")) + put("pkgb/b_test.go", testsFor("pkgb", "B", "n*2")) +
-		writeFile("CONTRACT.md", "# Contract\n\nA adds one. B doubles.\n")
+		writeFile("CONTRACT.md", "# Contract\n\n## Unclear in the spec\n\nNothing.\n\nA adds one. B doubles.\n")
 }
 
 func planJSON(tasks ...string) string {
@@ -64,7 +64,7 @@ func runPlanner(t *testing.T, c Claude) (Result, string, error) {
 
 func TestPlannerEmitsAValidatedTaskGraph(t *testing.T) {
 	c, _ := setUpRun(t)
-	fakeAgents(t, map[string]string{
+	fakeAgents(t, c, map[string]string{
 		"architect": twoPackages(),
 		"plan":      planJSON(taskJSON("a", "pkga"), taskJSON("b", "pkgb")),
 	})
@@ -84,6 +84,7 @@ func TestPlannerEmitsAValidatedTaskGraph(t *testing.T) {
 }
 
 func TestPlannerRejections(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name, answer, want string
 	}{
@@ -95,7 +96,7 @@ func TestPlannerRejections(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			c, _ := setUpRun(t)
-			fakeAgents(t, map[string]string{"architect": twoPackages(), "plan": tt.answer})
+			fakeAgents(t, c, map[string]string{"architect": twoPackages(), "plan": tt.answer})
 			mustRun(t, c, architect)
 			_, _, err := runPlanner(t, c)
 			if tt.want == "" {
@@ -115,7 +116,7 @@ func TestPlannerRejections(t *testing.T) {
 // and both merge. Neither runs the other's failing tests in its check.
 func TestScopedNodesRunInParallelAndMerge(t *testing.T) {
 	c, _ := setUpRun(t)
-	fakeAgents(t, map[string]string{
+	fakeAgents(t, c, map[string]string{
 		"architect": twoPackages(),
 		"a":         put("pkga/a.go", doneFor("pkga", "A", "n + 1")) + "mkdir -p .factory/notes && echo a > .factory/notes/a.md",
 		"b":         put("pkgb/b.go", doneFor("pkgb", "B", "n * 2")) + "mkdir -p .factory/notes && echo b > .factory/notes/b.md",
@@ -150,6 +151,7 @@ func TestScopedNodesRunInParallelAndMerge(t *testing.T) {
 }
 
 func TestScopeViolations(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name, work, want string
 	}{
@@ -162,7 +164,7 @@ func TestScopeViolations(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			c, _ := setUpRun(t)
-			fakeAgents(t, map[string]string{"architect": twoPackages(), "a": tt.work})
+			fakeAgents(t, c, map[string]string{"architect": twoPackages(), "a": tt.work})
 			mustRun(t, c, architect)
 			x := Task{Run: "r", Attempt: 1, Node: graph.Node{ID: "a", Kind: graph.Agent, Role: "implementer", Scope: []string{"pkga"}}}
 			_, err := c.Run(t.Context(), x, func(string) {})
@@ -211,7 +213,7 @@ const plantedTasks = `{"tasks": [{"id": "b", "title": "b", "scope": ["pkgb"], "d
 // still goes through validation.
 func TestPlantedPlanReplacesTheFirstPlanner(t *testing.T) {
 	c, _ := setUpRun(t)
-	fakeAgents(t, map[string]string{"architect": twoPackages(), "plan": planJSON(taskJSON("x", "pkga"), taskJSON("y", "pkgb"))})
+	fakeAgents(t, c, map[string]string{"architect": twoPackages(), "plan": planJSON(taskJSON("x", "pkga"), taskJSON("y", "pkgb"))})
 	mustRun(t, c, architect)
 	c.PlantedPlan = plantedTasks
 	res, log, err := runPlanner(t, c)
@@ -230,7 +232,7 @@ func TestPlantedPlanReplacesTheFirstPlanner(t *testing.T) {
 // A replan plans the packages that no kept task owns, and may depend on a kept task.
 func TestReplanPlansOnlyTheFreePackages(t *testing.T) {
 	c, _ := setUpRun(t)
-	fakeAgents(t, map[string]string{"architect": twoPackages(), "replan-1": planJSON(taskJSON("b2", "pkgb", "a"))})
+	fakeAgents(t, c, map[string]string{"architect": twoPackages(), "replan-1": planJSON(taskJSON("b2", "pkgb", "a"))})
 	mustRun(t, c, architect)
 	c.PlantedPlan = plantedTasks // a replan must not use it
 	replan := Task{Run: "r", Attempt: 1, Node: graph.Node{ID: "replan-1", Kind: graph.Plan},

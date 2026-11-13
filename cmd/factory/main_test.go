@@ -37,7 +37,7 @@ func TestServeStopsBeforeResumeWhenPortIsBusy(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer busy.Close()
-	if err := serve([]string{"-addr", busy.Addr().String(), "-db", db, "-ui", ""}); err == nil {
+	if err := serve([]string{"-addr", busy.Addr().String(), "-db", db, "-ui", "", "-guardrails", "../../guardrails.yaml"}); err == nil {
 		t.Fatal("serve started on a busy port")
 	}
 

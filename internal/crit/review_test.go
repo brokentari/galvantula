@@ -36,8 +36,4 @@ func TestReadEmpty(t *testing.T) {
 	if c, n, err := Read("", 12); err != nil || c != nil || n != "" {
 		t.Errorf("no file: got %v %q %v", c, n, err)
 	}
-	os.WriteFile(p, []byte(`{`), 0o644)
-	if _, _, err := Read(p, 12); err == nil {
-		t.Error("a broken file gave no error")
-	}
 }

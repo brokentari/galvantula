@@ -2,11 +2,16 @@ package executor
 
 import (
 	"fmt"
+	"go/ast"
+	"go/importer"
+	"go/parser"
+	"go/token"
+	"go/types"
 	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
-	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/brokentari/galvantula/internal/event"
@@ -77,7 +82,7 @@ const architectTemplate = `Design the program that spec.md describes, in this di
 Write these files:
 - The packages, types and function signatures of the program. Each function body is a stub that compiles and returns zero values or an error such as errors.New("not implemented"). A stub must never panic: a panic stops the test run, so the other tests cannot run.
 - Acceptance tests (_test.go files) for every behavior that spec.md states. Test through the program's interface. For a command, put its logic in a function that main calls, such as run(args, stdin, stdout, stderr) int, and test that function. Where the spec fixes the output, check it exactly.
-- CONTRACT.md. A person reads this file to approve the contract, so keep it short and plain. Start it with a section headed "## Unclear in the spec": one list item for each place where spec.md is unclear, with the choice your tests make. Write "Nothing." there if spec.md leaves nothing open. After it, give the packages and their interfaces, and what the tests check.
+- CONTRACT.md. A person reads this file to approve the contract, so keep it short and plain. Start it with a section headed "## Unclear in the spec": one list item for each place where spec.md is unclear, with the choice your tests make. Write "Nothing." there if spec.md leaves nothing open. The check fails without this section. After it, give the packages and their interfaces, and what the tests check.
 
 Rules for the tests:
 - A builder will implement the stubs, and may not change your tests. Test what the spec says, and nothing it leaves open.
@@ -234,10 +239,17 @@ func nothingToFix(repo workspace.Repo) string {
 }
 
 // readContract logs one line about the contract and returns it for the gate.
-// The file is the architect's, so it must be a regular file: a link could
-// point at /dev/zero or at a file outside the repo.
 func readContract(repo workspace.Repo, log func(string), red redCounts) *event.Contract {
-	path := filepath.Join(repo.Dir, "CONTRACT.md")
+	c := loadContract(repo.Dir, red)
+	if c != nil {
+		log(fmt.Sprintf("contract: %d tests, %d fail on the stubs (the full file is %s)", red.tests, red.failed, filepath.Join(repo.Dir, "CONTRACT.md")))
+	}
+	return c
+}
+
+// loadContract reads dir's CONTRACT.md only if it is a regular file: a link could point at /dev/zero or outside the repo.
+func loadContract(dir string, red redCounts) *event.Contract {
+	path := filepath.Join(dir, "CONTRACT.md")
 	info, err := os.Lstat(path)
 	if err != nil || !info.Mode().IsRegular() {
 		return nil
@@ -251,7 +263,6 @@ func readContract(repo workspace.Repo, log func(string), red redCounts) *event.C
 	if err != nil {
 		return nil
 	}
-	log(fmt.Sprintf("contract: %d tests, %d fail on the stubs (the full file is %s)", red.tests, red.failed, path))
 	c := event.NewContract(string(data), red.tests, red.failed)
 	return &c
 }
@@ -284,15 +295,10 @@ func noLinks(dir string) error {
 	return nil
 }
 
-// shortcut: skipCall matches any receiver, so a method named Skip or a comment
-// can fail a test that skips nothing. Narrow it if that happens. Keep it wide
-// otherwise: a narrow match lets a contract skip tests through another receiver name.
-var skipCall = regexp.MustCompile(`\.Skip(f|Now)?\(`)
-
-// noSkips fails if a test file in dir calls t.Skip: a skipped test does not
-// show that the code works, and a contract with skips can be passed by doing nothing.
+// noSkips fails if a test file in dir uses Skip, Skipf or SkipNow from package testing.
 func noSkips(dir string) error {
-	var bad []string
+	fset := token.NewFileSet()
+	pkgs := map[string][]*ast.File{}
 	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -300,28 +306,55 @@ func noSkips(dir string) error {
 		if d.IsDir() && (d.Name() == ".git" || d.Name() == ".factory") {
 			return filepath.SkipDir
 		}
-		// A link would make ReadFile read what it points to, such as /dev/zero.
 		if !d.Type().IsRegular() || !strings.HasSuffix(path, "_test.go") {
 			return nil
 		}
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		if skipCall.Match(data) {
-			rel, _ := filepath.Rel(dir, path)
-			bad = append(bad, rel)
+		f, _ := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
+		if f != nil && f.Name != nil {
+			key := filepath.Dir(path) + " " + f.Name.Name
+			pkgs[key] = append(pkgs[key], f)
 		}
 		return nil
 	})
-	if err != nil {
+	if err != nil || len(pkgs) == 0 {
 		return err
 	}
+	// Without package testing nothing resolves and every file would pass.
+	testingPkg, err := importer.Default().Import("testing")
+	if err != nil {
+		return &InfraError{Err: fmt.Errorf("load package testing: %w", err)}
+	}
+	conf := types.Config{
+		// Never run go list on the agent's import paths.
+		Importer: importFunc(func(path string) (*types.Package, error) {
+			if path == "testing" {
+				return testingPkg, nil
+			}
+			return nil, fmt.Errorf("%s is not loaded", path)
+		}),
+		Error: func(error) {},
+	}
+	var bad []string
+	for _, files := range pkgs {
+		info := &types.Info{Uses: map[*ast.Ident]types.Object{}}
+		conf.Check("", fset, files, info)
+		for id, obj := range info.Uses {
+			if fn, ok := obj.(*types.Func); ok && fn.Pkg() == testingPkg && slices.Contains([]string{"Skip", "Skipf", "SkipNow"}, fn.Name()) {
+				rel, _ := filepath.Rel(dir, fset.Position(id.Pos()).Filename)
+				bad = append(bad, rel)
+			}
+		}
+	}
 	if len(bad) > 0 {
-		return fmt.Errorf("test files must not skip tests: %s", strings.Join(bad, ", "))
+		slices.Sort(bad)
+		return fmt.Errorf("test files must not skip tests: %s", strings.Join(slices.Compact(bad), ", "))
 	}
 	return nil
 }
+
+type importFunc func(path string) (*types.Package, error)
+
+func (f importFunc) Import(path string) (*types.Package, error) { return f(path) }
 
 // minTests and minRed are the architect's red-before-green rule: the tests
 // run on the stubs, and most of them must fail.

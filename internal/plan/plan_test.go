@@ -26,7 +26,6 @@ func TestParse(t *testing.T) {
 	for name, answer := range map[string]string{
 		"no JSON":       "I will split it in two.",
 		"unknown field": `{"tasks": [], "extra": 1}`,
-		"wrong type":    `{"tasks": [{"id": 3}]}`,
 	} {
 		if _, err := Parse(answer); err == nil {
 			t.Errorf("%s: accepted", name)

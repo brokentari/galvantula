@@ -5,12 +5,6 @@ import (
 	"testing"
 )
 
-func TestRepoGuardrailsAreValid(t *testing.T) {
-	if _, err := Load("../../guardrails.yaml"); err != nil {
-		t.Fatal(err)
-	}
-}
-
 func TestRunBudgetCoversOneNode(t *testing.T) {
 	g, err := Load("../../guardrails.yaml")
 	if err != nil {

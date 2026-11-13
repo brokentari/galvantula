@@ -8,6 +8,30 @@ every decision, and a React UI shows each run live.
 
 ![A fake run in the UI: the contract gate with a line comment, a send-back, the task gate, then the build](docs/demo.gif)
 
+## When to use Claude Code
+
+Use Claude Code alone for a small program. It costs less and passed more often.
+In the evals in `evals/results/`, one agent passed the hidden tests in 60 of
+62 runs of `wordfreq`, `todo` and `csvq`, at $0.10 to $0.17 a run. The factory
+passed 11 of 14 runs of the same specs, at $0.18 to $0.62.
+
+Use the factory when you must trust the result without reading all the code:
+
+- **You decide what "correct" means, before any code exists.** With one
+  prompt, you learn what the agent assumed when you read its code. Here the
+  architect lists each place the spec is unclear and the choice its tests
+  make. You approve or correct each choice at the gate.
+- **The builder cannot grade its own work.** One agent that writes the code
+  and the tests can weaken a test until it passes. Here the tests you approved
+  are frozen. A builder that edits, deletes or skips one fails its check.
+- **"Done" is a check, not a claim.** The runtime runs gofmt, vet, `go fix`
+  and the tests itself, in a sandbox, before it merges any work.
+- **Every decision is on record.** The event log holds each attempt, check,
+  gate and cost. You can replay a run, and a crash loses no finished work.
+
+The evals do not yet show if the factory passes more often than one agent on
+a large program, such as `evals/rotom`.
+
 ## Run the demo
 
 The demo uses a fake executor, so it needs no credential. You need Go 1.27 and
