@@ -5,9 +5,12 @@
 package sandbox
 
 import (
+	"cmp"
 	"context"
+	"os"
 	"os/exec"
 	"slices"
+	"sync"
 	"time"
 )
 
@@ -23,20 +26,27 @@ type Spec struct {
 // waitDelay bounds how long Wait waits for output pipes after the command is killed.
 const waitDelay = 5 * time.Second
 
+// rootLinks copies the host's links such as /lib64 -> usr/lib64, since binaries name their loader by that path.
+var rootLinks = sync.OnceValue(func() []string {
+	var b []string
+	for _, l := range [][2]string{{"/bin", "usr/bin"}, {"/sbin", "usr/bin"}, {"/lib", "usr/lib"}, {"/lib64", "usr/lib"}} {
+		target, _ := os.Readlink(l[0])
+		b = append(b, "--symlink", cmp.Or(target, l[1]), l[0])
+	}
+	return b
+})
+
 // Command returns name with args, wrapped in bwrap.
 func Command(ctx context.Context, s Spec, name string, args ...string) *exec.Cmd {
-	b := []string{
+	b := slices.Concat([]string{
 		"--unshare-all", "--share-net", "--die-with-parent", "--new-session",
 		"--ro-bind", "/usr", "/usr",
 		"--ro-bind", "/etc", "/etc",
-		"--symlink", "usr/bin", "/bin",
-		"--symlink", "usr/bin", "/sbin",
-		"--symlink", "usr/lib", "/lib",
-		"--symlink", "usr/lib", "/lib64",
+	}, rootLinks(), []string{
 		"--proc", "/proc",
 		"--dev", "/dev",
 		"--tmpfs", "/tmp",
-	}
+	})
 	for _, p := range s.RO {
 		b = append(b, "--ro-bind", p, p)
 	}
